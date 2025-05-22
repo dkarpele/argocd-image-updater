@@ -14,7 +14,7 @@ RUN go mod download
 # Copy the go source
 COPY cmd/ cmd/
 COPY api/ api/
-COPY internal/controller/ internal/controller/
+COPY internal/ internal/
 COPY ext/ ext/
 COPY pkg/ pkg/
 

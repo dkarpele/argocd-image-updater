@@ -20,7 +20,7 @@ spec:
       branch: "main"
       writeBackTarget: "helmvalues:/helm/config/test-values.yaml" # OR "kustomization:/config/overlays/bar" OR "helmvalues:/{{ .app.path.path }}/values.yaml" - for ApplicationSet.
   applicationRefs:
-    - namePattern: "image-updater-001"
+    - namePattern: "image-updater-001" # <- This wins because it's more specific
     - namePattern: "image-updater-*"
       labelSelectors:
         matchLabels:

@@ -2,8 +2,12 @@ package main
 
 import (
 	"crypto/tls"
+	"os"
+	"path/filepath"
+	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
 
 	"github.com/argoproj-labs/argocd-image-updater/internal/controller"
+	webhookv1 "github.com/argoproj-labs/argocd-image-updater/internal/webhook/v1"
 	"github.com/argoproj-labs/argocd-image-updater/registry-scanner/pkg/log"
 	"github.com/bombsimon/logrusr/v2"
 	"github.com/spf13/cobra"
@@ -24,6 +28,7 @@ func newControllerCommand() *cobra.Command {
 	var enableHTTP2 bool
 	var LogLevel string
 	var Interval time.Duration
+	var webhookCertPath, webhookCertName, webhookCertKey string
 
 	var controllerCmd = &cobra.Command{
 		Use:   "controller",
@@ -65,8 +70,32 @@ This enables a CRD-driven approach to automated image updates with Argo CD.
 				tlsOpts = append(tlsOpts, disableHTTP2)
 			}
 
+			// Create watchers for webhooks certificates
+			var webhookCertWatcher *certwatcher.CertWatcher
+
+			// Initial webhook TLS options
+			webhookTLSOpts := tlsOpts
+
+			if len(webhookCertPath) > 0 {
+				setupLog.Info("Initializing webhook certificate watcher using provided certificates",
+					"webhook-cert-path", webhookCertPath, "webhook-cert-name", webhookCertName, "webhook-cert-key", webhookCertKey)
+
+				var err error
+				webhookCertWatcher, err = certwatcher.New(
+					filepath.Join(webhookCertPath, webhookCertName),
+					filepath.Join(webhookCertPath, webhookCertKey),
+				)
+				if err != nil {
+					setupLog.Error(err, "Failed to initialize webhook certificate watcher")
+					os.Exit(1)
+				}
+
+				webhookTLSOpts = append(webhookTLSOpts, func(config *tls.Config) {
+					config.GetCertificate = webhookCertWatcher.GetCertificate
+				})
+			}
 			webhookServer := webhook.NewServer(webhook.Options{
-				TLSOpts: tlsOpts,
+				TLSOpts: webhookTLSOpts,
 			})
 
 			// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. The Metrics options configure the server.
@@ -127,6 +156,12 @@ This enables a CRD-driven approach to automated image updates with Argo CD.
 				setupLog.Error(err, "unable to create controller", "controller", "ImageUpdater")
 				return err
 			}
+
+			if err := webhookv1.SetupWebhookWithManager(mgr); err != nil {
+				setupLog.Error(err, "unable to create webhook", "webhook", "ImageUpdater")
+				os.Exit(1)
+			}
+
 			// +kubebuilder:scaffold:builder
 
 			if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
@@ -160,6 +195,12 @@ This enables a CRD-driven approach to automated image updates with Argo CD.
 		"set the loglevel to one of trace|debug|info|warn|error")
 	controllerCmd.Flags().DurationVar(&Interval, "interval", 2*time.Minute,
 		"interval for how often to check for updates")
+	controllerCmd.Flags().StringVar(&webhookCertPath, "webhook-cert-path", "",
+		"The directory that contains the webhook certificate.")
+	controllerCmd.Flags().StringVar(&webhookCertName, "webhook-cert-name", "tls.crt",
+		"The name of the webhook certificate file.")
+	controllerCmd.Flags().StringVar(&webhookCertKey, "webhook-cert-key", "tls.key",
+		"The name of the webhook key file.")
 
 	return controllerCmd
 }

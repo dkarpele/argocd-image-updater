@@ -17,10 +17,11 @@ limitations under the License.
 package main
 
 import (
-	"k8s.io/apimachinery/pkg/runtime"
 	"os"
 	"text/template"
 	"time"
+
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/argoproj-labs/argocd-image-updater/ext/git"
 	"github.com/argoproj-labs/argocd-image-updater/pkg/argocd"
@@ -32,9 +33,10 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
-	argocdimageupdaterv1alpha1 "github.com/argoproj-labs/argocd-image-updater/api/v1alpha1"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+
+	argocdimageupdaterv1alpha1 "github.com/argoproj-labs/argocd-image-updater/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
