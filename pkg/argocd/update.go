@@ -185,7 +185,7 @@ func UpdateApplication(updateConf *UpdateConfiguration, state *SyncIterationStat
 			AddField("application", app).
 			AddField("registry", updateableImage.RegistryURL).
 			AddField("image_name", updateableImage.ImageName).
-			AddField("image_tag", updateableImage.ImageTag).
+			AddField("RegistryURLimage_tag", updateableImage.ImageTag).
 			AddField("alias", applicationImage.ImageAlias)
 
 		if updateableImage.KustomizeImage != nil {

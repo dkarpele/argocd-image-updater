@@ -7,7 +7,7 @@ import (
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	api "github.com/argoproj-labs/argocd-image-updater/api/v1alpha1"
+	iuapi "github.com/argoproj-labs/argocd-image-updater/api/v1alpha1"
 
 	"os"
 	"path/filepath"
@@ -23,7 +23,7 @@ import (
 
 	argocdclient "github.com/argoproj/argo-cd/v2/pkg/apiclient"
 	"github.com/argoproj/argo-cd/v2/pkg/apiclient/application"
-	"github.com/argoproj/argo-cd/v2/pkg/apis/application/v1alpha1"
+	argocdapi "github.com/argoproj/argo-cd/v2/pkg/apis/application/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/errors"
 )
 
@@ -34,8 +34,8 @@ type k8sClient struct {
 
 // GetApplication retrieves a single application by its name and namespace.
 // TODO: the function will be probably updated to use `NamePattern` in GITOPS-7119
-func (client *k8sClient) GetApplication(ctx context.Context, appNamespace string, appName string) (*v1alpha1.Application, error) {
-	app := &v1alpha1.Application{}
+func (client *k8sClient) GetApplication(ctx context.Context, appNamespace string, appName string) (*argocdapi.Application, error) {
+	app := &argocdapi.Application{}
 
 	if err := client.ctrlClient.Get(ctx, types.NamespacedName{Namespace: appNamespace, Name: appName}, app); err != nil {
 		return nil, err
@@ -46,14 +46,14 @@ func (client *k8sClient) GetApplication(ctx context.Context, appNamespace string
 // GetApplicationInAllNamespaces
 // TODO: the function will be probably used when we implement `NamePattern` in GITOPS-7119
 // It has 0 usages now.
-func (client *k8sClient) GetApplicationInAllNamespaces(appName string) (*v1alpha1.Application, error) {
+func (client *k8sClient) GetApplicationInAllNamespaces(appName string) (*argocdapi.Application, error) {
 	appList, err := client.ListApplications(context.TODO(), nil, "")
 	if err != nil {
 		return nil, fmt.Errorf("error listing applications: %w", err)
 	}
 
 	// Filter applications by name using nameMatchesPattern
-	var matchedApps []v1alpha1.Application
+	var matchedApps []argocdapi.Application
 
 	for _, app := range appList {
 		log.Debugf("Found application: %s in namespace %s", app.Name, app.Namespace)
@@ -77,11 +77,11 @@ func (client *k8sClient) GetApplicationInAllNamespaces(appName string) (*v1alpha
 
 // ListApplications lists all applications for the current ImageUpdater CR in the namespace.
 // TODO: LabelSelector was not implemented here. It will be done in a separate task GITOPS-7119
-func (client *k8sClient) ListApplications(ctx context.Context, cr *api.ImageUpdater, labelSelector string) ([]v1alpha1.Application, error) {
+func (client *k8sClient) ListApplications(ctx context.Context, cr *iuapi.ImageUpdater, labelSelector string) ([]argocdapi.Application, error) {
 	log := log.LoggerFromContext(ctx)
 
 	// A list to hold the successfully found applications.
-	foundApps := make([]v1alpha1.Application, 0)
+	foundApps := make([]argocdapi.Application, 0)
 	// A map to prevent processing the same application name twice if it appears in multiple refs.
 	seenApps := make(map[string]bool)
 	// The target namespace is defined once in the spec.
@@ -118,9 +118,9 @@ func (client *k8sClient) ListApplications(ctx context.Context, cr *api.ImageUpda
 }
 
 // UpdateSpec updates the spec for given application
-func (client *k8sClient) UpdateSpec(ctx context.Context, spec *application.ApplicationUpdateSpecRequest) (*v1alpha1.ApplicationSpec, error) {
+func (client *k8sClient) UpdateSpec(ctx context.Context, spec *application.ApplicationUpdateSpecRequest) (*argocdapi.ApplicationSpec, error) {
 	log := log.LoggerFromContext(ctx)
-	app := &v1alpha1.Application{}
+	app := &argocdapi.Application{}
 	var err error
 
 	// Use RetryOnConflict to handle potential conflicts gracefully.
@@ -168,9 +168,9 @@ type argoCD struct {
 //
 //go:generate mockery --name ArgoCD --output ./mocks --outpkg mocks
 type ArgoCD interface {
-	GetApplication(ctx context.Context, appNamespace string, appName string) (*v1alpha1.Application, error)
-	ListApplications(ctx context.Context, cr *api.ImageUpdater, labelSelector string) ([]v1alpha1.Application, error)
-	UpdateSpec(ctx context.Context, spec *application.ApplicationUpdateSpecRequest) (*v1alpha1.ApplicationSpec, error)
+	GetApplication(ctx context.Context, appNamespace string, appName string) (*argocdapi.Application, error)
+	ListApplications(ctx context.Context, cr *iuapi.ImageUpdater, labelSelector string) ([]argocdapi.Application, error)
+	UpdateSpec(ctx context.Context, spec *application.ApplicationUpdateSpecRequest) (*argocdapi.ApplicationSpec, error)
 }
 
 // ApplicationType Type of the application
@@ -219,7 +219,7 @@ func NewAPIClient(opts *ClientOptions) (ArgoCD, error) {
 }
 
 type ApplicationImages struct {
-	Application v1alpha1.Application
+	Application argocdapi.Application
 	Images      image.ContainerImageList
 }
 
@@ -243,10 +243,67 @@ func nameMatchesPattern(name string, patterns []string) bool {
 	return false
 }
 
-// Retrieve a list of applications from ArgoCD that qualify for image updates
+// processExactNamePatternMatches processes all EXACT name matches
+// Loop through applicationRefs...
+// if a ref has NO wildcards:
+//
+//	Perform a direct client.Get() for that app.
+//	If found, add it to finalRules.
+func (client *k8sClient) processExactNamePatternMatches(ctx context.Context, cr *iuapi.ImageUpdater) (map[string]ApplicationImages, error) {
+	log := log.LoggerFromContext(ctx)
+
+	if !areNamePatternsWoWildcards(cr.Spec.ApplicationRefs) {
+		log.Warnf("NamePatterns have wildcards in their names. Falling back to wildcard matching.")
+		return nil, nil
+	}
+
+	var appsForUpdate = make(map[string]ApplicationImages)
+
+	for _, applicationRef := range cr.Spec.ApplicationRefs {
+		app, err := client.GetApplication(ctx, cr.Spec.Namespace, applicationRef.NamePattern)
+		if err != nil {
+			return nil, err
+		}
+
+		appNSName := fmt.Sprintf("%s/%s", cr.Spec.Namespace, applicationRef.NamePattern)
+		sourceType := getApplicationSourceType(app)
+
+		// Check for valid application type
+		if !IsValidApplicationType(app) {
+			log.Warnf("skipping app '%s' of type '%s' because it's not of supported source type", appNSName, sourceType)
+			continue
+		}
+
+		log.Tracef("processing app '%s' of type '%v'", appNSName, sourceType)
+		appImages := ApplicationImages{}
+		appImages.Application = *app
+		imageList := parseImageList(applicationRef.Images)
+		appImages.Images = *imageList
+		appsForUpdate[appNSName] = appImages
+	}
+	return appsForUpdate, nil
+}
+
+func areNamePatternsWoWildcards(applicationRefs []iuapi.ApplicationRef) bool {
+	for _, applicationRef := range applicationRefs {
+		switch {
+		case strings.Contains(applicationRef.NamePattern, "*"):
+			return false
+		case strings.Contains(applicationRef.NamePattern, "?"):
+			return false
+		case strings.Contains(applicationRef.NamePattern, "["):
+			return false
+		case strings.Contains(applicationRef.NamePattern, "]"):
+			return false
+		}
+	}
+	return true
+}
+
+// FilterApplicationsForUpdate Retrieve a list of applications from ArgoCD that qualify for image updates
 // Application needs either to be of type Kustomize or Helm and must have the
 // correct annotation in order to be considered.
-func FilterApplicationsForUpdate(apps []v1alpha1.Application, patterns []string) (map[string]ApplicationImages, error) {
+func FilterApplicationsForUpdate(ctx context.Context, cr *iuapi.ImageUpdater, apps []argocdapi.Application, patterns []string) (map[string]ApplicationImages, error) {
 	var appsForUpdate = make(map[string]ApplicationImages)
 
 	for _, app := range apps {
@@ -274,7 +331,7 @@ func FilterApplicationsForUpdate(apps []v1alpha1.Application, patterns []string)
 		}
 
 		logCtx.Tracef("processing app '%s' of type '%v'", appNSName, sourceType)
-		imageList := parseImageList(annotations)
+		imageList := &image.ContainerImageList{}
 		appImages := ApplicationImages{}
 		appImages.Application = app
 		appImages.Images = *imageList
@@ -284,23 +341,22 @@ func FilterApplicationsForUpdate(apps []v1alpha1.Application, patterns []string)
 	return appsForUpdate, nil
 }
 
-func parseImageList(annotations map[string]string) *image.ContainerImageList {
+func parseImageList(images []iuapi.ImageConfig) *image.ContainerImageList {
 	results := make(image.ContainerImageList, 0)
-	if updateImage, ok := annotations[common.ImageUpdaterAnnotation]; ok {
-		splits := strings.Split(updateImage, ",")
-		for _, s := range splits {
-			img := image.NewFromIdentifier(strings.TrimSpace(s))
-			if kustomizeImage := img.GetParameterKustomizeImageName(annotations, common.ImageUpdaterAnnotationPrefix); kustomizeImage != "" {
-				img.KustomizeImage = image.NewFromIdentifier(kustomizeImage)
-			}
-			results = append(results, img)
+
+	for _, im := range images {
+		img := image.NewFromIdentifier(im.Alias + "=" + im.ImageName)
+		if kustomizeImage := im.ManifestTarget.Kustomize.Name; kustomizeImage != "" {
+			img.KustomizeImage = image.NewFromIdentifier(kustomizeImage)
 		}
+		results = append(results, img)
 	}
+
 	return &results
 }
 
 // GetApplication gets the application named appName from Argo CD API
-func (client *argoCD) GetApplication(ctx context.Context, appNamespace string, appName string) (*v1alpha1.Application, error) {
+func (client *argoCD) GetApplication(ctx context.Context, appNamespace string, appName string) (*argocdapi.Application, error) {
 	conn, appClient, err := client.Client.NewApplicationClient()
 	metrics.Clients().IncreaseArgoCDClientRequest(client.Client.ClientOptions().ServerAddr, 1)
 	if err != nil {
@@ -321,7 +377,7 @@ func (client *argoCD) GetApplication(ctx context.Context, appNamespace string, a
 
 // ListApplications returns a list of all application names that the API user
 // has access to.
-func (client *argoCD) ListApplications(ctx context.Context, cr *api.ImageUpdater, labelSelector string) ([]v1alpha1.Application, error) {
+func (client *argoCD) ListApplications(ctx context.Context, cr *iuapi.ImageUpdater, labelSelector string) ([]argocdapi.Application, error) {
 	conn, appClient, err := client.Client.NewApplicationClient()
 	metrics.Clients().IncreaseArgoCDClientRequest(client.Client.ClientOptions().ServerAddr, 1)
 	if err != nil {
@@ -341,7 +397,7 @@ func (client *argoCD) ListApplications(ctx context.Context, cr *api.ImageUpdater
 }
 
 // UpdateSpec updates the spec for given application
-func (client *argoCD) UpdateSpec(ctx context.Context, in *application.ApplicationUpdateSpecRequest) (*v1alpha1.ApplicationSpec, error) {
+func (client *argoCD) UpdateSpec(ctx context.Context, in *application.ApplicationUpdateSpecRequest) (*argocdapi.ApplicationSpec, error) {
 	conn, appClient, err := client.Client.NewApplicationClient()
 	metrics.Clients().IncreaseArgoCDClientRequest(client.Client.ClientOptions().ServerAddr, 1)
 	if err != nil {
@@ -391,7 +447,7 @@ func getHelmParamNamesFromAnnotation(annotations map[string]string, img *image.C
 }
 
 // Get a named helm parameter from a list of parameters
-func getHelmParam(params []v1alpha1.HelmParameter, name string) *v1alpha1.HelmParameter {
+func getHelmParam(params []argocdapi.HelmParameter, name string) *argocdapi.HelmParameter {
 	for _, param := range params {
 		if param.Name == name {
 			return &param
@@ -402,8 +458,8 @@ func getHelmParam(params []v1alpha1.HelmParameter, name string) *v1alpha1.HelmPa
 
 // mergeHelmParams merges a list of Helm parameters specified by merge into the
 // Helm parameters given as src.
-func mergeHelmParams(src []v1alpha1.HelmParameter, merge []v1alpha1.HelmParameter) []v1alpha1.HelmParameter {
-	retParams := make([]v1alpha1.HelmParameter, 0)
+func mergeHelmParams(src []argocdapi.HelmParameter, merge []argocdapi.HelmParameter) []argocdapi.HelmParameter {
+	retParams := make([]argocdapi.HelmParameter, 0)
 	merged := make(map[string]interface{})
 
 	// first look for params that need replacement
@@ -434,7 +490,7 @@ func mergeHelmParams(src []v1alpha1.HelmParameter, merge []v1alpha1.HelmParamete
 
 // GetHelmImage gets the image set in Application source matching new image
 // or an empty string if match is not found
-func GetHelmImage(app *v1alpha1.Application, newImage *image.ContainerImage) (string, error) {
+func GetHelmImage(app *argocdapi.Application, newImage *image.ContainerImage) (string, error) {
 
 	if appType := getApplicationType(app); appType != ApplicationTypeHelm {
 		return "", fmt.Errorf("cannot set Helm params on non-Helm application")
@@ -482,7 +538,7 @@ func GetHelmImage(app *v1alpha1.Application, newImage *image.ContainerImage) (st
 }
 
 // SetHelmImage sets image parameters for a Helm application
-func SetHelmImage(app *v1alpha1.Application, newImage *image.ContainerImage) error {
+func SetHelmImage(app *argocdapi.Application, newImage *image.ContainerImage) error {
 	if appType := getApplicationType(app); appType != ApplicationTypeHelm {
 		return fmt.Errorf("cannot set Helm params on non-Helm application")
 	}
@@ -511,21 +567,21 @@ func SetHelmImage(app *v1alpha1.Application, newImage *image.ContainerImage) err
 		AddField("namespace", appNamespace).
 		Debugf("target parameters: image-spec=%s image-name=%s, image-tag=%s", hpImageSpec, hpImageName, hpImageTag)
 
-	mergeParams := make([]v1alpha1.HelmParameter, 0)
+	mergeParams := make([]argocdapi.HelmParameter, 0)
 
 	// The logic behind this is that image-spec is an override - if this is set,
 	// we simply ignore any image-name and image-tag parameters that might be
 	// there.
 	if hpImageSpec != "" {
-		p := v1alpha1.HelmParameter{Name: hpImageSpec, Value: newImage.GetFullNameWithTag(), ForceString: true}
+		p := argocdapi.HelmParameter{Name: hpImageSpec, Value: newImage.GetFullNameWithTag(), ForceString: true}
 		mergeParams = append(mergeParams, p)
 	} else {
 		if hpImageName != "" {
-			p := v1alpha1.HelmParameter{Name: hpImageName, Value: newImage.GetFullNameWithoutTag(), ForceString: true}
+			p := argocdapi.HelmParameter{Name: hpImageName, Value: newImage.GetFullNameWithoutTag(), ForceString: true}
 			mergeParams = append(mergeParams, p)
 		}
 		if hpImageTag != "" {
-			p := v1alpha1.HelmParameter{Name: hpImageTag, Value: newImage.GetTagWithDigest(), ForceString: true}
+			p := argocdapi.HelmParameter{Name: hpImageTag, Value: newImage.GetTagWithDigest(), ForceString: true}
 			mergeParams = append(mergeParams, p)
 		}
 	}
@@ -533,11 +589,11 @@ func SetHelmImage(app *v1alpha1.Application, newImage *image.ContainerImage) err
 	appSource := getApplicationSource(app)
 
 	if appSource.Helm == nil {
-		appSource.Helm = &v1alpha1.ApplicationSourceHelm{}
+		appSource.Helm = &argocdapi.ApplicationSourceHelm{}
 	}
 
 	if appSource.Helm.Parameters == nil {
-		appSource.Helm.Parameters = make([]v1alpha1.HelmParameter, 0)
+		appSource.Helm.Parameters = make([]argocdapi.HelmParameter, 0)
 	}
 
 	appSource.Helm.Parameters = mergeHelmParams(appSource.Helm.Parameters, mergeParams)
@@ -547,7 +603,7 @@ func SetHelmImage(app *v1alpha1.Application, newImage *image.ContainerImage) err
 
 // GetKustomizeImage gets the image set in Application source matching new image
 // or an empty string if match is not found
-func GetKustomizeImage(app *v1alpha1.Application, newImage *image.ContainerImage) (string, error) {
+func GetKustomizeImage(app *argocdapi.Application, newImage *image.ContainerImage) (string, error) {
 	if appType := getApplicationType(app); appType != ApplicationTypeKustomize {
 		return "", fmt.Errorf("cannot set Kustomize image on non-Kustomize application")
 	}
@@ -567,7 +623,7 @@ func GetKustomizeImage(app *v1alpha1.Application, newImage *image.ContainerImage
 	}
 
 	for _, a := range ksImages {
-		if a.Match(v1alpha1.KustomizeImage(ksImageName)) {
+		if a.Match(argocdapi.KustomizeImage(ksImageName)) {
 			return string(a), nil
 		}
 	}
@@ -576,7 +632,7 @@ func GetKustomizeImage(app *v1alpha1.Application, newImage *image.ContainerImage
 }
 
 // SetKustomizeImage sets a Kustomize image for given application
-func SetKustomizeImage(app *v1alpha1.Application, newImage *image.ContainerImage) error {
+func SetKustomizeImage(app *argocdapi.Application, newImage *image.ContainerImage) error {
 	if appType := getApplicationType(app); appType != ApplicationTypeKustomize {
 		return fmt.Errorf("cannot set Kustomize image on non-Kustomize application")
 	}
@@ -594,7 +650,7 @@ func SetKustomizeImage(app *v1alpha1.Application, newImage *image.ContainerImage
 	appSource := getApplicationSource(app)
 
 	if appSource.Kustomize == nil {
-		appSource.Kustomize = &v1alpha1.ApplicationSourceKustomize{}
+		appSource.Kustomize = &argocdapi.ApplicationSourceKustomize{}
 	}
 
 	for i, kImg := range appSource.Kustomize.Images {
@@ -603,20 +659,21 @@ func SetKustomizeImage(app *v1alpha1.Application, newImage *image.ContainerImage
 
 		if curr.ImageName == override.ImageName {
 			curr.ImageAlias = override.ImageAlias
-			appSource.Kustomize.Images[i] = v1alpha1.KustomizeImage(override.String())
+			appSource.Kustomize.Images[i] = argocdapi.KustomizeImage(override.String())
 		}
 
 	}
 
-	appSource.Kustomize.MergeImage(v1alpha1.KustomizeImage(ksImageParam))
+	appSource.Kustomize.MergeImage(argocdapi.KustomizeImage(ksImageParam))
 
 	return nil
 }
 
 // GetImagesFromApplication returns the list of known images for the given application
-func GetImagesFromApplication(app *v1alpha1.Application) image.ContainerImageList {
+func GetImagesFromApplication(app *argocdapi.Application) image.ContainerImageList {
 	images := make(image.ContainerImageList, 0)
 
+	// Get images deployed with the current ArgoCD app.
 	for _, imageStr := range app.Status.Summary.Images {
 		image := image.NewFromIdentifier(imageStr)
 		images = append(images, image)
@@ -636,7 +693,7 @@ func GetImagesFromApplication(app *v1alpha1.Application) image.ContainerImageLis
 }
 
 // GetImagesFromApplicationImagesAnnotation returns the list of known images for the given application from the images annotation
-func GetImagesAndAliasesFromApplication(app *v1alpha1.Application) image.ContainerImageList {
+func GetImagesAndAliasesFromApplication(app *argocdapi.Application) image.ContainerImageList {
 	images := GetImagesFromApplication(app)
 
 	// We update the ImageAlias field of the Images found in the app.Status.Summary.Images list.
@@ -676,32 +733,32 @@ func GetApplicationTypeByName(client ArgoCD, appName string) (ApplicationType, e
 }
 
 // GetApplicationType returns the type of the ArgoCD application
-func GetApplicationType(app *v1alpha1.Application) ApplicationType {
+func GetApplicationType(app *argocdapi.Application) ApplicationType {
 	return getApplicationType(app)
 }
 
 // GetApplicationSourceType returns the source type of the ArgoCD application
-func GetApplicationSourceType(app *v1alpha1.Application) v1alpha1.ApplicationSourceType {
+func GetApplicationSourceType(app *argocdapi.Application) argocdapi.ApplicationSourceType {
 	return getApplicationSourceType(app)
 }
 
 // GetApplicationSource returns the main source of a Helm or Kustomize type of the ArgoCD application
-func GetApplicationSource(app *v1alpha1.Application) *v1alpha1.ApplicationSource {
+func GetApplicationSource(app *argocdapi.Application) *argocdapi.ApplicationSource {
 	return getApplicationSource(app)
 }
 
 // IsValidApplicationType returns true if we can update the application
-func IsValidApplicationType(app *v1alpha1.Application) bool {
+func IsValidApplicationType(app *argocdapi.Application) bool {
 	return getApplicationType(app) != ApplicationTypeUnsupported
 }
 
 // getApplicationType returns the type of the application
-func getApplicationType(app *v1alpha1.Application) ApplicationType {
+func getApplicationType(app *argocdapi.Application) ApplicationType {
 	sourceType := getApplicationSourceType(app)
 
-	if sourceType == v1alpha1.ApplicationSourceTypeKustomize {
+	if sourceType == argocdapi.ApplicationSourceTypeKustomize {
 		return ApplicationTypeKustomize
-	} else if sourceType == v1alpha1.ApplicationSourceTypeHelm {
+	} else if sourceType == argocdapi.ApplicationSourceTypeHelm {
 		return ApplicationTypeHelm
 	} else {
 		return ApplicationTypeUnsupported
@@ -709,31 +766,31 @@ func getApplicationType(app *v1alpha1.Application) ApplicationType {
 }
 
 // getApplicationSourceType returns the source type of the application
-func getApplicationSourceType(app *v1alpha1.Application) v1alpha1.ApplicationSourceType {
+func getApplicationSourceType(app *argocdapi.Application) argocdapi.ApplicationSourceType {
 
 	if st, set := app.Annotations[common.WriteBackTargetAnnotation]; set &&
 		strings.HasPrefix(st, common.KustomizationPrefix) {
-		return v1alpha1.ApplicationSourceTypeKustomize
+		return argocdapi.ApplicationSourceTypeKustomize
 	}
 
 	if app.Spec.HasMultipleSources() {
 		for _, st := range app.Status.SourceTypes {
-			if st == v1alpha1.ApplicationSourceTypeHelm {
-				return v1alpha1.ApplicationSourceTypeHelm
-			} else if st == v1alpha1.ApplicationSourceTypeKustomize {
-				return v1alpha1.ApplicationSourceTypeKustomize
-			} else if st == v1alpha1.ApplicationSourceTypePlugin {
-				return v1alpha1.ApplicationSourceTypePlugin
+			if st == argocdapi.ApplicationSourceTypeHelm {
+				return argocdapi.ApplicationSourceTypeHelm
+			} else if st == argocdapi.ApplicationSourceTypeKustomize {
+				return argocdapi.ApplicationSourceTypeKustomize
+			} else if st == argocdapi.ApplicationSourceTypePlugin {
+				return argocdapi.ApplicationSourceTypePlugin
 			}
 		}
-		return v1alpha1.ApplicationSourceTypeDirectory
+		return argocdapi.ApplicationSourceTypeDirectory
 	}
 
 	return app.Status.SourceType
 }
 
 // getApplicationSource returns the main source of a Helm or Kustomize type of the application
-func getApplicationSource(app *v1alpha1.Application) *v1alpha1.ApplicationSource {
+func getApplicationSource(app *argocdapi.Application) *argocdapi.ApplicationSource {
 
 	if app.Spec.HasMultipleSources() {
 		for _, s := range app.Spec.Sources {
