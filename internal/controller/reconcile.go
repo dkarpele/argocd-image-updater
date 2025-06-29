@@ -35,8 +35,7 @@ func (r *ImageUpdaterReconciler) RunImageUpdater(ctx context.Context, cr *api.Im
 	}
 	r.Config.ArgoClient = argoClient
 
-	// Get the list of applications that are allowed for updates, that is, those
-	// applications which have correct annotation.
+	// Get the list of applications that are allowed for updates.
 	appList, err := r.Config.ArgoClient.FilterApplicationsForUpdate(ctx, cr)
 	if err != nil {
 		return result, err

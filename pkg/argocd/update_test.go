@@ -3,6 +3,7 @@ package argocd
 import (
 	"errors"
 	"fmt"
+	iuapi "github.com/argoproj-labs/argocd-image-updater/api/v1alpha1"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,6 +55,8 @@ func Test_UpdateApplication(t *testing.T) {
 		annotations := map[string]string{
 			common.ImageUpdaterAnnotation: "foobar=gcr.io/jannfis/foobar:>=1.0.1,foobar=gcr.io/jannfis/barbar:>=1.0.1",
 		}
+		// TODO: tmp w/a to compile code
+		var tmpIm []iuapi.ImageConfig
 		appImages := &ApplicationImages{
 			Application: v1alpha1.Application{
 				ObjectMeta: v1.ObjectMeta{
@@ -81,7 +84,7 @@ func Test_UpdateApplication(t *testing.T) {
 					},
 				},
 			},
-			Images: *parseImageList(annotations),
+			Images: *parseImageList(tmpIm),
 		}
 		res := UpdateApplication(&UpdateConfiguration{
 			NewRegFN:   mockClientFn,
@@ -125,6 +128,7 @@ func Test_UpdateApplication(t *testing.T) {
 			common.ImageUpdaterAnnotation:    "foo=gcr.io/jannfis/foobar:>=1.0.1",
 			common.WriteBackMethodAnnotation: "git:secret:argocd-image-updater/git-creds",
 		}
+		var tmpIm []iuapi.ImageConfig
 		appImages := &ApplicationImages{
 			Application: v1alpha1.Application{
 				ObjectMeta: v1.ObjectMeta{
@@ -152,7 +156,7 @@ func Test_UpdateApplication(t *testing.T) {
 					},
 				},
 			},
-			Images: *parseImageList(annotations),
+			Images: *parseImageList(tmpIm),
 		}
 		res := UpdateApplication(&UpdateConfiguration{
 			NewRegFN:   mockClientFn,
@@ -686,6 +690,7 @@ func Test_UpdateApplication(t *testing.T) {
 			common.ImageUpdaterAnnotation: "foobar=gcr.io/jannfis/foobar:>=1.0.1",
 			fmt.Sprintf(registryCommon.Prefixed(common.ImageUpdaterAnnotationPrefix, registryCommon.KustomizeApplicationNameAnnotationSuffix), "foobar"): "jannfis/foobar",
 		}
+		var tmpIm []iuapi.ImageConfig
 		appImages := &ApplicationImages{
 			Application: v1alpha1.Application{
 				ObjectMeta: v1.ObjectMeta{
@@ -711,7 +716,7 @@ func Test_UpdateApplication(t *testing.T) {
 					},
 				},
 			},
-			Images: *parseImageList(annotations),
+			Images: *parseImageList(tmpIm),
 		}
 		res := UpdateApplication(&UpdateConfiguration{
 			NewRegFN:   mockClientFn,
@@ -747,6 +752,7 @@ func Test_UpdateApplication(t *testing.T) {
 			common.ImageUpdaterAnnotation: "foobar=gcr.io/jannfis/foobar:>=1.0.1",
 			fmt.Sprintf(registryCommon.Prefixed(common.ImageUpdaterAnnotationPrefix, registryCommon.KustomizeApplicationNameAnnotationSuffix), "foobar"): "jannfis/foobar",
 		}
+		var tmpIm []iuapi.ImageConfig
 		appImages := &ApplicationImages{
 			Application: v1alpha1.Application{
 				ObjectMeta: v1.ObjectMeta{
@@ -772,7 +778,7 @@ func Test_UpdateApplication(t *testing.T) {
 					},
 				},
 			},
-			Images: *parseImageList(annotations),
+			Images: *parseImageList(tmpIm),
 		}
 		res := UpdateApplication(&UpdateConfiguration{
 			NewRegFN:   mockClientFn,

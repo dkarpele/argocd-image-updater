@@ -28,13 +28,16 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 )
 
+// maxApplicationRefsForExactMatchCheck is the threshold above which we skip
+// the exact matching check to avoid performance issues with too many API calls.
+const maxApplicationRefsForExactMatchCheck = 500
+
 // Kubernetes based client
 type k8sClient struct {
 	ctrlClient ctrlclient.Client
 }
 
 // GetApplication retrieves a single application by its name and namespace.
-// TODO: the function will be probably updated to use `NamePattern` in GITOPS-7119
 func (client *k8sClient) GetApplication(ctx context.Context, appNamespace string, appName string) (*argocdapi.Application, error) {
 	app := &argocdapi.Application{}
 
@@ -44,9 +47,8 @@ func (client *k8sClient) GetApplication(ctx context.Context, appNamespace string
 	return app, nil
 }
 
-// GetApplicationInAllNamespaces
-// TODO: the function will be probably used when we implement `NamePattern` in GITOPS-7119
-// It has 0 usages now.
+// GetApplicationInAllNamespaces has 0 usages now.
+// TODO: remove the function.
 func (client *k8sClient) GetApplicationInAllNamespaces(appName string) (*argocdapi.Application, error) {
 	appList, err := client.ListApplications(context.TODO(), nil)
 	if err != nil {
@@ -58,7 +60,7 @@ func (client *k8sClient) GetApplicationInAllNamespaces(appName string) (*argocda
 
 	for _, app := range appList {
 		log.Debugf("Found application: %s in namespace %s", app.Name, app.Namespace)
-		if nameMatchesPatterns(app.Name, []string{appName}) {
+		if nameMatchesPatterns(nil, app.Name, []string{appName}) {
 			log.Debugf("Application %s matches the pattern", app.Name)
 			matchedApps = append(matchedApps, app)
 		}
@@ -77,8 +79,7 @@ func (client *k8sClient) GetApplicationInAllNamespaces(appName string) (*argocda
 }
 
 // ListApplications lists all applications for the current ImageUpdater CR in the namespace.
-// TODO: LabelSelector was not implemented here. It will be done in a separate task GITOPS-7119
-func (client *k8sClient) ListApplications(ctx context.Context, cr *iuapi.ImageUpdater) ([]argocdapi.Application, error) {
+func (client *k8sClient) ListApplications(ctx context.Context, iuCR *iuapi.ImageUpdater) ([]argocdapi.Application, error) {
 	log := log.LoggerFromContext(ctx)
 
 	// A list to hold the successfully found applications.
@@ -86,10 +87,10 @@ func (client *k8sClient) ListApplications(ctx context.Context, cr *iuapi.ImageUp
 	// A map to prevent processing the same application name twice if it appears in multiple refs.
 	seenApps := make(map[string]bool)
 	// The target namespace is defined once in the spec.
-	targetNamespace := cr.Spec.Namespace
+	targetNamespace := iuCR.Spec.Namespace
 
 	// Iterate through each application reference in the spec.
-	for _, appRef := range cr.Spec.ApplicationRefs {
+	for _, appRef := range iuCR.Spec.ApplicationRefs {
 		// We are now treating NamePattern as an exact name.
 		appName := appRef.NamePattern
 
@@ -103,7 +104,7 @@ func (client *k8sClient) ListApplications(ctx context.Context, cr *iuapi.ImageUp
 
 		if err != nil {
 			if errors.IsNotFound(err) {
-				log.Warnf("Application '%s' in namespace '%s' specified in ImageUpdater '%s' was not found, skipping.", appName, targetNamespace, cr.Name)
+				log.Warnf("Application '%s' in namespace '%s' specified in ImageUpdater '%s' was not found, skipping.", appName, targetNamespace, iuCR.Name)
 				seenApps[appKey] = true // Mark as seen so we don't try again.
 				continue
 			}
@@ -170,9 +171,10 @@ type argoCD struct {
 //go:generate mockery --name ArgoCD --output ./mocks --outpkg mocks
 type ArgoCD interface {
 	GetApplication(ctx context.Context, appNamespace string, appName string) (*argocdapi.Application, error)
-	ListApplications(ctx context.Context, cr *iuapi.ImageUpdater) ([]argocdapi.Application, error)
+	// TODO: ListApplications has 0 real usages. We need to remove it.
+	ListApplications(ctx context.Context, iuCR *iuapi.ImageUpdater) ([]argocdapi.Application, error)
 	UpdateSpec(ctx context.Context, spec *application.ApplicationUpdateSpecRequest) (*argocdapi.ApplicationSpec, error)
-	FilterApplicationsForUpdate(ctx context.Context, cr *iuapi.ImageUpdater) (map[string]ApplicationImages, error)
+	FilterApplicationsForUpdate(ctx context.Context, iuCR *iuapi.ImageUpdater) (map[string]ApplicationImages, error)
 }
 
 // ApplicationType Type of the application
@@ -230,12 +232,12 @@ type ApplicationImages struct {
 type ImageList map[string]ApplicationImages
 
 // nameMatchesPatterns Matches a name against a list of patterns
-func nameMatchesPatterns(name string, patterns []string) bool {
+func nameMatchesPatterns(ctx context.Context, name string, patterns []string) bool {
 	if len(patterns) == 0 {
 		return true
 	}
 	for _, p := range patterns {
-		if nameMatchesPattern(name, p) {
+		if nameMatchesPattern(ctx, name, p) {
 			return true
 		}
 	}
@@ -243,7 +245,8 @@ func nameMatchesPatterns(name string, patterns []string) bool {
 }
 
 // nameMatchesPattern Matches a name against a pattern
-func nameMatchesPattern(name string, pattern string) bool {
+func nameMatchesPattern(ctx context.Context, name string, pattern string) bool {
+	log := log.LoggerFromContext(ctx)
 	log.Tracef("Matching application name %s against pattern %s", name, pattern)
 
 	m, err := filepath.Match(pattern, name)
@@ -301,51 +304,40 @@ func nameMatchesLabels(labels map[string]string, selectors *metav1.LabelSelector
 	return true
 }
 
-// processExactNamePatternMatches processes all EXACT name matches
-func (client *k8sClient) processExactNamePatternMatches(ctx context.Context, cr *iuapi.ImageUpdater) (map[string]ApplicationImages, error) {
+// processApplicationForUpdate checks if an application is of a supported type,
+// and if so, creates an ApplicationImages struct and adds it to the update map.
+func processApplicationForUpdate(ctx context.Context, app *argocdapi.Application, appRef iuapi.ApplicationRef, appNSName string, appsForUpdate map[string]ApplicationImages) {
 	log := log.LoggerFromContext(ctx)
+	sourceType := getApplicationSourceType(app)
 
-	if !areAllAppNamePatternsExactMatches(ctx, cr.Spec.ApplicationRefs) {
-		log.Warnf("NamePatterns have wildcards in their names. Falling back to wildcard matching.")
-		return nil, nil
+	// Check for valid application type
+	if !IsValidApplicationType(app) {
+		log.Warnf("skipping app '%s' of type '%s' because it's not of supported source type", appNSName, sourceType)
+		return
 	}
 
-	var appsForUpdate = make(map[string]ApplicationImages)
-
-	for _, applicationRef := range cr.Spec.ApplicationRefs {
-		app, err := client.GetApplication(ctx, cr.Spec.Namespace, applicationRef.NamePattern)
-		if err != nil {
-			return nil, err
-		}
-
-		appNSName := fmt.Sprintf("%s/%s", cr.Spec.Namespace, applicationRef.NamePattern)
-		sourceType := getApplicationSourceType(app)
-
-		// Check for valid application type
-		if !IsValidApplicationType(app) {
-			log.Warnf("skipping app '%s' of type '%s' because it's not of supported source type", appNSName, sourceType)
-			continue
-		}
-
-		log.Tracef("processing app '%s' of type '%v'", appNSName, sourceType)
-		appImages := ApplicationImages{}
-		appImages.Application = *app
-		imageList := parseImageList(applicationRef.Images)
-		appImages.Images = *imageList
-		appsForUpdate[appNSName] = appImages
+	log.Tracef("processing app '%s' of type '%v'", appNSName, sourceType)
+	imageList := parseImageList(appRef.Images)
+	appImages := ApplicationImages{
+		Application: *app,
+		Images:      *imageList,
 	}
-	return appsForUpdate, nil
+	appsForUpdate[appNSName] = appImages
 }
 
-func areAllAppNamePatternsExactMatches(ctx context.Context, applicationRefs []iuapi.ApplicationRef) bool {
+// allApplicationRefsAreExactMatches checks if all application references in the provided slice
+// are exact name matches (i.e., do not contain any glob wildcards).
+// It also logs a warning if the number of references exceeds a certain threshold,
+// as checking a very large number of references for exact matches might be inefficient.
+func allApplicationRefsAreExactMatches(ctx context.Context, applicationRefs []iuapi.ApplicationRef) bool {
 	log := log.LoggerFromContext(ctx)
-	if len(applicationRefs) > 500 {
-		log.Warnf("Too many name applicationRefs in the Image Updater CR. Skipping the exact matching check.")
+	if len(applicationRefs) > maxApplicationRefsForExactMatchCheck {
+		log.Warnf("Too many application references in the Image Updater CR (%d). Skipping the exact matching check for performance reasons.", len(applicationRefs))
 		return false
 	}
 	for _, applicationRef := range applicationRefs {
 		if strings.ContainsAny(applicationRef.NamePattern, "*?[]") {
-			return false
+			return false // Found a wildcard, so not all are exact matches.
 		}
 	}
 	return true
@@ -354,7 +346,7 @@ func areAllAppNamePatternsExactMatches(ctx context.Context, applicationRefs []iu
 func sortApplicationRefs(applicationRefs []iuapi.ApplicationRef) []iuapi.ApplicationRef {
 	// Create a slice to hold the rules for sorting.
 	sortedRefs := make([]iuapi.ApplicationRef, len(applicationRefs))
-	copy(sortedRefs, applicationRefs) // Work on a copy
+	copy(sortedRefs, applicationRefs)
 
 	// Sort the slice from most specific to least specific.
 	slices.SortStableFunc(sortedRefs, func(a, b iuapi.ApplicationRef) int {
@@ -392,11 +384,8 @@ func calculateSpecificity(applicationRef iuapi.ApplicationRef) int {
 
 	// 2. Add points for the number of literal characters in the pattern.
 	// This makes "app-prod-*" more specific than "app-*".
-	// We do this by removing wildcards and counting the length of what's left.
-	literals := strings.ReplaceAll(pattern, "*", "")
-	for _, c := range "?[]" {
-		literals = strings.ReplaceAll(literals, string(c), "")
-	}
+	// We do this by removing glob wildcards and counting the length of what's left.
+	literals := strings.NewReplacer("*", "", "?", "", "[", "", "]", "").Replace(pattern)
 	score += len(literals)
 
 	// 3. Add a significant bonus if a label selector is present.
@@ -416,15 +405,73 @@ func calculateSpecificity(applicationRef iuapi.ApplicationRef) int {
 	return score
 }
 
+// getAppsForUpdateFromRefs handles the "fast path" for exact name matches. It iterates
+// through the application references in the CR, fetches each application directly by name,
+// and prepares it for the update process. This avoids listing all applications in the namespace.
+func (client *k8sClient) getAppsForUpdateFromRefs(ctx context.Context, cr *iuapi.ImageUpdater) (map[string]ApplicationImages, error) {
+	log := log.LoggerFromContext(ctx)
+	appsForUpdate := make(map[string]ApplicationImages)
+
+	// Cache fetched applications to avoid redundant API calls.
+	fetchedAppsCache := make(map[string]*argocdapi.Application)
+
+	for _, appRef := range cr.Spec.ApplicationRefs {
+		appName := appRef.NamePattern
+		appNamespace := cr.Spec.Namespace
+		appKey := fmt.Sprintf("%s/%s", appNamespace, appName)
+
+		var app *argocdapi.Application
+		var foundInCache bool
+
+		// 1. Check the cache before making an API call.
+		if app, foundInCache = fetchedAppsCache[appKey]; !foundInCache {
+			var err error
+			app, err = client.GetApplication(ctx, appNamespace, appName)
+			if err != nil {
+				if errors.IsNotFound(err) {
+					log.Warnf("Application '%s' in namespace '%s' not found, skipping.", appName, appNamespace)
+					continue // This specific app ref did not resolve, but others might.
+				}
+				// For any other error (e.g., network, permissions), we fail the entire reconciliation.
+				log.Errorf("Failed to get application '%s' in namespace '%s': %v", appName, appNamespace, err)
+				return nil, err
+			}
+			fetchedAppsCache[appKey] = app
+		}
+
+		// 2. Check if the application is already in our results map.
+		// Use case:
+		//  applicationRefs:
+		//    - namePattern: "image-updater-001"
+		//      images:
+		//        - alias: "test1"
+		//          imageName: "test1:1.1.0"
+		//    - namePattern: "image-updater-001"
+		//      images:
+		//        - alias: "test2"
+		//          imageName: "test2:2.2.0"
+		if existing, ok := appsForUpdate[appKey]; ok {
+			// If it is, merge the images from the new ref instead of overwriting.
+			newImages := parseImageList(appRef.Images)
+			existing.Images = append(existing.Images, *newImages...)
+			appsForUpdate[appKey] = existing
+		} else {
+			// If it's the first time we're processing this app, add it to the appsForUpdate map.
+			processApplicationForUpdate(ctx, app, appRef, appKey, appsForUpdate)
+		}
+	}
+	return appsForUpdate, nil
+}
+
 // FilterApplicationsForUpdate Retrieve a list of applications from ArgoCD that qualify for image updates
-// Application needs either to be of type Kustomize or Helm and must have the
-// correct annotation in order to be considered.
+// Application needs either to be of type Kustomize or Helm.
 func (client *k8sClient) FilterApplicationsForUpdate(ctx context.Context, cr *iuapi.ImageUpdater) (map[string]ApplicationImages, error) {
 	log := log.LoggerFromContext(ctx)
 
-	if areAllAppNamePatternsExactMatches(ctx, cr.Spec.ApplicationRefs) {
+	// All namePatterns in applicationRefs are exact matches. namePatterns don't contain "*?[]".
+	if allApplicationRefsAreExactMatches(ctx, cr.Spec.ApplicationRefs) {
 		log.Debugf("All name patterns don't have wildcards. Getting all applications by thier names.")
-		return client.processExactNamePatternMatches(ctx, cr)
+		return client.getAppsForUpdateFromRefs(ctx, cr)
 	}
 
 	allAppsInNamespace := &argocdapi.ApplicationList{}
@@ -432,43 +479,34 @@ func (client *k8sClient) FilterApplicationsForUpdate(ctx context.Context, cr *iu
 		ctrlclient.InNamespace(cr.Spec.Namespace),
 	}
 
-	// Perform the list operation with the specified options.
+	// Perform the app list operation in the target namespace cr.Spec.Namespace.
 	log.Infof("Listing all applications in target namespace: %s", cr.Spec.Namespace)
 	if err := client.ctrlClient.List(ctx, allAppsInNamespace, listOpts...); err != nil {
 		log.Errorf("Failed to list applications in namespace: %s, error: %v", cr.Spec.Namespace, err)
 		return nil, err
 	}
 
+	if len(allAppsInNamespace.Items) == 0 {
+		log.Infof("No applications found in target namespace: %s", cr.Spec.Namespace)
+		return nil, nil
+	}
+
 	var appsForUpdate = make(map[string]ApplicationImages)
 
-	// Sort the slice from most specific to least specific.
+	// Sort namePatterns in applicationRefs from most specific to least specific.
 	applicationRefsSorted := sortApplicationRefs(cr.Spec.ApplicationRefs)
 
 	// For each app in the list, find its best matching rule from the CR.
 	for _, app := range allAppsInNamespace.Items {
-		appNSName := fmt.Sprintf("%s/%s", cr.Spec.Namespace, app.GetName())
-		sourceType := getApplicationSourceType(&app)
-
-		// Check for valid application type
-		if !IsValidApplicationType(&app) {
-			log.Warnf("skipping app '%s' of type '%s' because it's not of supported source type", appNSName, sourceType)
-			continue
-		}
-
+		// Find the first matching rule for this application
 		for _, applicationRef := range applicationRefsSorted {
-			if nameMatchesPattern(app.Name, applicationRef.NamePattern) && nameMatchesLabels(app.Labels, applicationRef.LabelSelectors) {
-				log.Tracef("processing app '%s' of type '%v'", appNSName, sourceType)
-				imageList := &image.ContainerImageList{}
-				appImages := ApplicationImages{}
-				appImages.Application = app
-				appImages.Images = *imageList
-				appsForUpdate[appNSName] = appImages
-				break
+			if nameMatchesPattern(ctx, app.Name, applicationRef.NamePattern) && nameMatchesLabels(app.Labels, applicationRef.LabelSelectors) {
+				appNSName := fmt.Sprintf("%s/%s", cr.Spec.Namespace, app.Name)
+				processApplicationForUpdate(ctx, &app, applicationRef, appNSName, appsForUpdate)
+				break // Found the best match, move to the next app
 			}
 		}
-
 	}
-
 	return appsForUpdate, nil
 }
 
@@ -477,8 +515,10 @@ func parseImageList(images []iuapi.ImageConfig) *image.ContainerImageList {
 
 	for _, im := range images {
 		img := image.NewFromIdentifier(im.Alias + "=" + im.ImageName)
-		if kustomizeImage := im.ManifestTarget.Kustomize.Name; kustomizeImage != "" {
-			img.KustomizeImage = image.NewFromIdentifier(kustomizeImage)
+		if im.ManifestTarget != nil && im.ManifestTarget.Kustomize != nil {
+			if kustomizeImage := im.ManifestTarget.Kustomize.Name; kustomizeImage != "" {
+				img.KustomizeImage = image.NewFromIdentifier(kustomizeImage)
+			}
 		}
 		results = append(results, img)
 	}
@@ -546,6 +586,10 @@ func (client *argoCD) UpdateSpec(ctx context.Context, in *application.Applicatio
 	}
 
 	return spec, nil
+}
+
+func (client *argoCD) FilterApplicationsForUpdate(ctx context.Context, cr *iuapi.ImageUpdater) (map[string]ApplicationImages, error) {
+	return nil, nil
 }
 
 // getHelmParamNamesFromAnnotation inspects the given annotations for whether
@@ -814,7 +858,10 @@ func GetImagesFromApplication(app *argocdapi.Application) image.ContainerImageLi
 	// The Application may wish to update images that don't create a container we can detect.
 	// Check the image list for images with a force-update annotation, and add them if they are not already present.
 	annotations := app.Annotations
-	for _, img := range *parseImageList(annotations) {
+
+	// TODO: tmp w/a to compile code
+	var tmpIm []iuapi.ImageConfig
+	for _, img := range *parseImageList(tmpIm) {
 		if img.HasForceUpdateOptionAnnotation(annotations, common.ImageUpdaterAnnotationPrefix) {
 			img.ImageTag = nil // the tag from the image list will be a version constraint, which isn't a valid tag
 			images = append(images, img)
@@ -829,7 +876,9 @@ func GetImagesAndAliasesFromApplication(app *argocdapi.Application) image.Contai
 	images := GetImagesFromApplication(app)
 
 	// We update the ImageAlias field of the Images found in the app.Status.Summary.Images list.
-	for _, img := range *parseImageList(app.Annotations) {
+	// TODO: tmp w/a to compile code
+	var tmpIm []iuapi.ImageConfig
+	for _, img := range *parseImageList(tmpIm) {
 		if image := images.ContainsImage(img, false); image != nil {
 			if image.ImageAlias != "" {
 				// this image has already been matched to an alias, so create a copy
