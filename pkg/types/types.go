@@ -18,7 +18,7 @@ type ApplicationImages struct {
 
 // Image represents a container image and its update configuration.
 // It embeds the neutral ContainerImage type and adds updater-specific
-// configuration.
+// configuration. Use this struct to populate elements from ImageUpdater CR.
 type Image struct {
 	*image.ContainerImage
 
@@ -29,6 +29,12 @@ type Image struct {
 	IgnoreTags     []string
 	PullSecret     string
 	Platforms      []string
+
+	// ManifestTarget settings
+	HelmName      string
+	HelmTag       string
+	HelmSpec      string
+	KustomizeName string
 }
 
 // ImageList is a list of Image objects that can be updated.
@@ -52,6 +58,10 @@ func (i *Image) Clone() *Image {
 		ForceUpdate:    i.ForceUpdate,
 		AllowTags:      i.AllowTags,
 		PullSecret:     i.PullSecret,
+		HelmName:       i.HelmName,
+		HelmTag:        i.HelmTag,
+		HelmSpec:       i.HelmSpec,
+		KustomizeName:  i.KustomizeName,
 	}
 
 	if i.IgnoreTags != nil {

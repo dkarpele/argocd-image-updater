@@ -1180,6 +1180,10 @@ func Test_parseImageListIuCR(t *testing.T) {
 			PullSecret:     "",
 			IgnoreTags:     []string{},
 			Platforms:      []string{},
+			HelmName:       "",
+			HelmTag:        "",
+			HelmSpec:       "",
+			KustomizeName:  kustomizeName,
 		}
 
 		if kustomizeName != "" {
@@ -1213,7 +1217,7 @@ func Test_parseImageListIuCR(t *testing.T) {
 					ImageName: "nginx:1.21.0",
 					ManifestTarget: &api.ManifestTarget{
 						Kustomize: &api.KustomizeTarget{
-							Name: "my-custom-nginx-name",
+							Name: strPtr("my-custom-nginx-name"),
 						},
 					},
 				},
@@ -1230,7 +1234,7 @@ func Test_parseImageListIuCR(t *testing.T) {
 					ImageName: "nginx:1.21.0",
 					ManifestTarget: &api.ManifestTarget{
 						Kustomize: &api.KustomizeTarget{
-							Name: "my-custom-nginx-name",
+							Name: strPtr("my-custom-nginx-name"),
 						},
 					},
 				},

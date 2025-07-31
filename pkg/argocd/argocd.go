@@ -394,7 +394,7 @@ func (client *k8sClient) FilterApplicationsForUpdate(ctx context.Context, cr *iu
 }
 
 // newContainerImageFromCommonSettings creates a new image.ContainerImage and populates it
-// by layering the given settings on top of a parent configuration.
+// by layering the given update settings on top of a parent configuration.
 func newContainerImageFromCommonSettings(ctx context.Context, settings *iuapi.CommonUpdateSettings, parentImage *iutypes.Image) *iutypes.Image {
 	// Start with a clone of the parent to avoid side effects.
 	// If there is no parent, start with a fresh struct populated with the ultimate defaults.
@@ -410,6 +410,10 @@ func newContainerImageFromCommonSettings(ctx context.Context, settings *iuapi.Co
 			PullSecret:     "",
 			IgnoreTags:     []string{},
 			Platforms:      []string{},
+			HelmName:       "",
+			HelmTag:        "",
+			HelmSpec:       "",
+			KustomizeName:  "",
 		}
 	}
 
@@ -440,22 +444,78 @@ func newContainerImageFromCommonSettings(ctx context.Context, settings *iuapi.Co
 	return img
 }
 
+// newImageFromManifestTargetSettings creates a new Image and populates it
+// by layering the given Manifest target settings on top of a parent configuration.
+func newImageFromManifestTargetSettings(settings *iuapi.ManifestTarget, parentImage *iutypes.Image) (*iutypes.Image, error) {
+	// Start with a clone of the parent to avoid side effects.
+	// If there is no parent, start with a fresh struct populated with the ultimate defaults.
+	var img *iutypes.Image
+	if parentImage != nil {
+		img = parentImage.Clone()
+	} else {
+		img = &iutypes.Image{
+			ContainerImage: &image.ContainerImage{},
+			UpdateStrategy: image.StrategySemVer,
+			ForceUpdate:    false,
+			AllowTags:      "",
+			PullSecret:     "",
+			IgnoreTags:     []string{},
+			Platforms:      []string{},
+			HelmName:       "",
+			HelmTag:        "",
+			HelmSpec:       "",
+			KustomizeName:  "",
+		}
+	}
+
+	if settings == nil {
+		return img, nil
+	}
+
+	if settings.Helm != nil && settings.Kustomize != nil {
+		return nil, fmt.Errorf("only one of the fields (Helm, Kustomize) should be set, dictating the update method")
+	}
+
+	// Layer the new settings on top, only if they are explicitly set (non-nil).
+	if settings.Helm != nil && settings.Helm.Spec != nil {
+		img.HelmSpec = *settings.Helm.Spec
+	} else {
+		if settings.Helm != nil && settings.Helm.Name != nil {
+			img.HelmName = *settings.Helm.Name
+		}
+		if settings.Helm != nil && settings.Helm.Tag != nil {
+			img.HelmTag = *settings.Helm.Tag
+		}
+	}
+	if settings.Kustomize != nil && settings.Kustomize.Name != nil {
+		img.KustomizeName = *settings.Kustomize.Name
+	}
+
+	return img, nil
+}
+
 // parseImageListIuCR parses a list of ImageConfig objects from the ImageUpdater CR
 // into a ContainerImageList, which is used internally for image management.
 // TODO: the function is explicitly written almost the same as parseImageList in order not to break existing tests. It should be only 1 function later.
 func parseImageListIuCR(ctx context.Context, images []iuapi.ImageConfig, appSettings *iutypes.Image) *iutypes.ImageList {
+	log := log.LoggerFromContext(ctx)
 	results := make(iutypes.ImageList, 0)
 
 	for _, im := range images {
 		// For each image, calculate its final settings by layering its specific
 		// settings on top of the application-level settings.
 		img := newContainerImageFromCommonSettings(ctx, im.CommonUpdateSettings, appSettings)
-		imgIdentity := image.NewFromIdentifier(im.Alias + "=" + im.ImageName)
-		img.ContainerImage = imgIdentity
+		img, err := newImageFromManifestTargetSettings(im.ManifestTarget, img)
+		if err != nil {
+			log.Warnf("Could not set manifest target config for image %s, skipping: %v", im.ImageName, err)
+			continue
+		}
 
-		if im.ManifestTarget != nil && im.ManifestTarget.Kustomize != nil {
-			if kustomizeImage := im.ManifestTarget.Kustomize.Name; kustomizeImage != "" {
-				img.KustomizeImage = image.NewFromIdentifier(kustomizeImage)
+		img.ContainerImage = image.NewFromIdentifier(im.Alias + "=" + im.ImageName)
+
+		if im.ManifestTarget != nil && im.ManifestTarget.Kustomize != nil && im.ManifestTarget.Kustomize.Name != nil {
+			if kustomizeImage := im.ManifestTarget.Kustomize.Name; *kustomizeImage != "" {
+				img.ContainerImage.KustomizeImage = image.NewFromIdentifier(*kustomizeImage)
 			}
 		}
 		results = append(results, img)
