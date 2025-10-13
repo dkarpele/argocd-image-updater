@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
       - name: git-http
-        image: 10.42.0.1:30000/git-http:latest
+        image: 127.0.0.1:30000/git-http:latest
         imagePullPolicy: Always
         ports:
           - containerPort: 8080

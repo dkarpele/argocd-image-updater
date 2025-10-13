@@ -1,4 +1,4 @@
-IMAGE_REPO		?= 10.42.0.1:30000
+IMAGE_REPO		?= 127.0.0.1:30000
 IMAGE_NAME		?= git-http
 IMAGE_TAG		?= latest
 
@@ -19,7 +19,7 @@ remove-k3s-images:
 copy-testdata:
 	cp -r testdata containers/git
 
-install-prereqs: 
+install-prereqs:
 	kustomize build prereqs/argocd | kubectl -n argocd-image-updater-e2e apply -f -
 	kubectl apply -n argocd-image-updater-e2e -f prereqs/registry/registry.yaml
 	kubectl rollout -n argocd-image-updater-e2e status deployment e2e-registry-public

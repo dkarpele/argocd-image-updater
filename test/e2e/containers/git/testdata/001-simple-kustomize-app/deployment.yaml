@@ -16,5 +16,5 @@ spec:
     spec:
       containers:
       - name: test
-        image: 10.42.0.1:30000/test-image:1.0.0
+        image: 127.0.0.1:30000/test-image:1.0.0
 

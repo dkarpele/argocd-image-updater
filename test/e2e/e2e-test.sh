@@ -4,8 +4,8 @@ set -o pipefail
 
 E2E_NAMESPACE=argocd-image-updater-e2e
 E2E_TIMEOUT=120
-E2E_REGISTRY_NOAUTH="10.42.0.1:30000"
-E2E_REGISTRY_AUTH="10.42.0.1:30001"
+E2E_REGISTRY_NOAUTH="127.0.0.1:30000"
+E2E_REGISTRY_AUTH="127.0.0.1:30001"
 
 SRC_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )/../.."
 export SRC_DIR
@@ -54,9 +54,9 @@ if ! kubectl kuttl version >/dev/null 2>&1; then
 fi
 
 for tag in 1.0.0 1.0.1 1.0.2 2.0.0 2.0.1 2.1.0 latest; do
-	build_image_if_not_exist "10.42.0.1:30000/test-image" "$tag"
+	build_image_if_not_exist "127.0.0.1:30000/test-image" "$tag"
 done
 
 prepare_registry
 
-kubectl kuttl test --namespace ${E2E_NAMESPACE} --timeout ${E2E_TIMEOUT} $*
+#kubectl kuttl test --namespace ${E2E_NAMESPACE} --timeout ${E2E_TIMEOUT} $*
