@@ -156,3 +156,136 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.out
+  test-e2e:
+    name: Run end-to-end tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        k3s-version: [ v1.27.1 ]
+        # k3s-version: [v1.20.2, v1.19.2, v1.18.9, v1.17.11, v1.16.15]
+    steps:
+      - name: Install K3D
+        run: |
+          set -x
+          curl -s https://raw.githubusercontent.com/rancher/k3d/main/install.sh | bash
+          sudo mkdir -p $HOME/.kube && sudo chown -R runner $HOME/.kube
+          k3d cluster create --servers 3 --image rancher/k3s:${{ matrix.k3s-version }}-k3s1
+          kubectl version
+          k3d version
+      - name: Checkout code
+        uses: actions/checkout@v5
+      - name: Setup Golang
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'test/ginkgo/go.mod'
+      - name: GH actions workaround - Kill XSP4 process
+        run: |
+          sudo pkill mono || true
+      - name: Restore go build cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: ${{ runner.os }}-go-build-v1-${{ github.run_id }}
+      - name: Add /usr/local/bin to PATH
+        run: |
+          echo "/usr/local/bin" >> $GITHUB_PATH
+      - name: Download Go dependencies
+        run: |
+          cd test/ginkgo && go mod download
+      - name: Build local image updater, deploy operator
+        env:
+          ARGOCD_CLUSTER_CONFIG_NAMESPACES: argocd-e2e-cluster-config
+          K3D_CLUSTER_NAME: k3s-default
+        run: |
+          set -o pipefail
+          make -C test/ginkgo test-e2e-ci
+
+      - name: Run ginkgo tests
+        run: |
+          set -o pipefail
+          make e2e-tests-parallel-ginkgo 2>&1 | tee /tmp/e2e-test-ginkgo.log
+
+      - name: Save application controller and server logs
+        if: ${{ failure() }}
+        run: |
+          # Collect logs from test namespaces. The ginkgo tests use dynamically generated
+          # namespace names with the prefix 'gitops-e2e-test-'.
+          set -x
+
+          # Find all gitops-e2e-test-* namespaces
+          E2E_NAMESPACES=$(kubectl get namespaces -o=name | grep 'gitops-e2e-test-' | sed 's|namespace/||' || true)
+
+          if [ -n "$E2E_NAMESPACES" ]; then
+            for NS in $E2E_NAMESPACES; do
+              echo "--- Collecting resources from namespace $NS ---"
+              kubectl get all -n "$NS" >> /tmp/pods.log 2>&1 || true
+
+              # Collect application controller logs
+              APP_CONTROLLER=$(kubectl get po -n "$NS" -o=name 2>/dev/null | grep argocd-application-controller || true)
+              if [ -n "$APP_CONTROLLER" ]; then
+                kubectl logs -n "$NS" "$APP_CONTROLLER" >> /tmp/e2e-application-controller.log 2>&1 || true
+              fi
+
+              # Collect server logs
+              SERVER_POD=$(kubectl get po -n "$NS" -o=name 2>/dev/null | grep argocd-server || true)
+              if [ -n "$SERVER_POD" ]; then
+                kubectl logs -n "$NS" "$SERVER_POD" >> /tmp/e2e-server.log 2>&1 || true
+                kubectl describe -n "$NS" "$SERVER_POD" >> /tmp/e2e-server.log 2>&1 || true
+              fi
+
+              # Collect image updater logs
+              IMAGE_UPDATER_POD=$(kubectl get po -n "$NS" -o=name 2>/dev/null | grep 'image-updater' || true)
+              if [ -n "$IMAGE_UPDATER_POD" ]; then
+                kubectl logs -n "$NS" "$IMAGE_UPDATER_POD" >> /tmp/e2e-image-updater.log 2>&1 || true
+              fi
+            done
+          fi
+
+          # Also collect operator logs from argocd-operator-system namespace
+          OPERATOR_POD=$(kubectl get po -n argocd-operator-system -o=name 2>/dev/null | grep controller-manager || true)
+          if [ -n "$OPERATOR_POD" ]; then
+            echo "--- Collecting operator logs ---"
+            kubectl logs -n argocd-operator-system "$OPERATOR_POD" -c manager > /tmp/e2e-operator-run.log 2>&1 || true
+          fi
+
+      - name: Upload operator logs
+        uses: actions/upload-artifact@v5
+        with:
+          name: e2e-operator-run-${{ matrix.k3s-version }}.log
+          path: /tmp/e2e-operator-run.log
+        if: ${{ failure() }}
+
+      - name: Upload ginkgo test logs
+        uses: actions/upload-artifact@v5
+        with:
+          name: e2e-test-${{ matrix.k3s-version }}.log
+          path: /tmp/e2e-test-ginkgo.log
+        if: ${{ failure() }}
+
+      - name: Upload application controller logs
+        uses: actions/upload-artifact@v5
+        with:
+          name: e2e-application-controller-${{ matrix.k3s-version }}.log
+          path: /tmp/e2e-application-controller.log
+        if: ${{ failure() }}
+
+      - name: Upload server logs
+        uses: actions/upload-artifact@v5
+        with:
+          name: e2e-server-${{ matrix.k3s-version }}.log
+          path: /tmp/e2e-server.log
+        if: ${{ failure() }}
+
+      - name: Upload image updater logs
+        uses: actions/upload-artifact@v5
+        with:
+          name: e2e-image-updater-${{ matrix.k3s-version }}.log
+          path: /tmp/e2e-image-updater.log
+        if: ${{ failure() }}
+
+      - name: Upload pod descriptions
+        uses: actions/upload-artifact@v5
+        with:
+          name: e2e-pods-${{ matrix.k3s-version }}.log
+          path: /tmp/pods.log
+        if: ${{ failure() }}
