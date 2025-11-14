@@ -27,6 +27,10 @@ export PATCH_TEMPLATE
 KUSTOMIZE ?= $(CURDIR)/../../bin/kustomize
 KUBECTL ?= kubectl
 
+ifndef ignore-not-found
+  ignore-not-found = false
+endif
+
 .PHONY: deploy-argocd-operator kustomize test-e2e
 deploy-argocd-operator: kustomize ## Deploy argocd-operator from a stable git reference.
 	@echo "Deploying Argo CD Operator..."
@@ -42,6 +46,15 @@ deploy-argocd-operator: kustomize ## Deploy argocd-operator from a stable git re
 	$(KUSTOMIZE) build $$TMP_DIR | $(KUBECTL) apply --server-side=true -f -; \
 	rm -rf $$TMP_DIR; \
 	echo "Argo CD Operator deployment initiated.";
+
+undeploy-argocd-operator: kustomize ## Deploy argocd-operator from a stable git reference.
+	@echo "Undeploying Argo CD Operator..."
+	@set -e; \
+	TMP_DIR=$$(mktemp -d); \
+	cp prereqs/kustomization.yaml $$TMP_DIR/kustomization.yaml; \
+	$(KUSTOMIZE) build $$TMP_DIR | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -; \
+	rm -rf $$TMP_DIR; \
+	echo "Argo CD Operator undeployment initiated.";
 
 kustomize:
 	$(MAKE) -C ../../ kustomize
