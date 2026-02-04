@@ -198,10 +198,10 @@ var _ = Describe("ApplicationRef UseAnnotations Validation", func() {
 			cr := &ImageUpdater{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "image-updater",
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 				},
 				Spec: ImageUpdaterSpec{
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 					ApplicationRefs: []ApplicationRef{
 						{
 							NamePattern:    "*",
@@ -226,10 +226,10 @@ var _ = Describe("ApplicationRef UseAnnotations Validation", func() {
 			cr := &ImageUpdater{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "image-updater-valid",
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 				},
 				Spec: ImageUpdaterSpec{
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 					ApplicationRefs: []ApplicationRef{
 						{
 							NamePattern:    "*",
@@ -264,10 +264,10 @@ var _ = Describe("ApplicationRef UseAnnotations Validation", func() {
 			cr := &ImageUpdater{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "image-updater-annotations-true",
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 				},
 				Spec: ImageUpdaterSpec{
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 					ApplicationRefs: []ApplicationRef{
 						{
 							NamePattern:    "*",
@@ -295,10 +295,10 @@ var _ = Describe("ApplicationRef UseAnnotations Validation", func() {
 			cr := &ImageUpdater{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "image-updater-annotations-true-with-images",
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 				},
 				Spec: ImageUpdaterSpec{
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 					ApplicationRefs: []ApplicationRef{
 						{
 							NamePattern:    "*",
@@ -333,10 +333,10 @@ var _ = Describe("ApplicationRef UseAnnotations Validation", func() {
 			cr := &ImageUpdater{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "image-updater-nil-no-images",
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 				},
 				Spec: ImageUpdaterSpec{
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 					ApplicationRefs: []ApplicationRef{
 						{
 							NamePattern: "*",
@@ -356,10 +356,10 @@ var _ = Describe("ApplicationRef UseAnnotations Validation", func() {
 			cr := &ImageUpdater{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "image-updater-nil-with-images",
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 				},
 				Spec: ImageUpdaterSpec{
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 					ApplicationRefs: []ApplicationRef{
 						{
 							NamePattern: "*",
@@ -389,10 +389,10 @@ var _ = Describe("ApplicationRef UseAnnotations Validation", func() {
 			cr := &ImageUpdater{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "image-updater-empty-images",
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 				},
 				Spec: ImageUpdaterSpec{
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 					ApplicationRefs: []ApplicationRef{
 						{
 							NamePattern:    "*",
@@ -414,10 +414,10 @@ var _ = Describe("ApplicationRef UseAnnotations Validation", func() {
 			cr := &ImageUpdater{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "image-updater-multiple-refs",
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 				},
 				Spec: ImageUpdaterSpec{
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 					ApplicationRefs: []ApplicationRef{
 						{
 							NamePattern:    "app-1",
@@ -442,10 +442,10 @@ var _ = Describe("ApplicationRef UseAnnotations Validation", func() {
 			cr := &ImageUpdater{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "image-updater-multiple-valid-refs",
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 				},
 				Spec: ImageUpdaterSpec{
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 					ApplicationRefs: []ApplicationRef{
 						{
 							NamePattern:    "app-1",
@@ -481,10 +481,10 @@ var _ = Describe("HelmTarget Validation", func() {
 			cr := &ImageUpdater{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "image-updater-helm-spec-only",
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 				},
 				Spec: ImageUpdaterSpec{
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 					ApplicationRefs: []ApplicationRef{
 						{
 							NamePattern: "*",
@@ -516,10 +516,10 @@ var _ = Describe("HelmTarget Validation", func() {
 			cr := &ImageUpdater{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "image-updater-helm-spec-with-name-tag",
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 				},
 				Spec: ImageUpdaterSpec{
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 					ApplicationRefs: []ApplicationRef{
 						{
 							NamePattern: "*",
@@ -555,10 +555,10 @@ var _ = Describe("HelmTarget Validation", func() {
 			cr := &ImageUpdater{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "image-updater-helm-name-tag",
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 				},
 				Spec: ImageUpdaterSpec{
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 					ApplicationRefs: []ApplicationRef{
 						{
 							NamePattern: "*",
@@ -591,10 +591,10 @@ var _ = Describe("HelmTarget Validation", func() {
 			cr := &ImageUpdater{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "image-updater-helm-name-only",
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 				},
 				Spec: ImageUpdaterSpec{
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 					ApplicationRefs: []ApplicationRef{
 						{
 							NamePattern: "*",
@@ -626,10 +626,10 @@ var _ = Describe("HelmTarget Validation", func() {
 			cr := &ImageUpdater{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "image-updater-helm-tag-only",
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 				},
 				Spec: ImageUpdaterSpec{
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 					ApplicationRefs: []ApplicationRef{
 						{
 							NamePattern: "*",
@@ -661,10 +661,10 @@ var _ = Describe("HelmTarget Validation", func() {
 			cr := &ImageUpdater{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "image-updater-helm-empty",
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 				},
 				Spec: ImageUpdaterSpec{
-					Namespace: "argocd",
+					Namespace: strPtr("argocd"),
 					ApplicationRefs: []ApplicationRef{
 						{
 							NamePattern: "*",

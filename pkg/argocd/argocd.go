@@ -244,20 +244,26 @@ func FilterApplicationsForUpdate(ctx context.Context, ctrlClient *ArgoCDK8sClien
 		}
 	}
 
-	allAppsInNamespace := &argocdapi.ApplicationList{}
-	listOpts := []ctrlclient.ListOption{
-		ctrlclient.InNamespace(cr.Spec.Namespace),
+	// Get effective namespace: use spec.namespace if set, otherwise default to CR's namespace
+	effectiveNamespace := cr.Namespace
+	if cr.Spec.Namespace != nil && *cr.Spec.Namespace != "" {
+		effectiveNamespace = *cr.Spec.Namespace
 	}
 
-	// Perform the app list operation in the target namespace cr.Spec.Namespace.
-	log.Infof("Listing all applications in target namespace: %s", cr.Spec.Namespace)
+	allAppsInNamespace := &argocdapi.ApplicationList{}
+	listOpts := []ctrlclient.ListOption{
+		ctrlclient.InNamespace(effectiveNamespace),
+	}
+
+	// Perform the app list operation in the target namespace.
+	log.Infof("Listing all applications in target namespace: %s", effectiveNamespace)
 	if err := ctrlClient.List(ctx, allAppsInNamespace, listOpts...); err != nil {
-		log.Errorf("Failed to list applications in namespace: %s, error: %v", cr.Spec.Namespace, err)
+		log.Errorf("Failed to list applications in namespace: %s, error: %v", effectiveNamespace, err)
 		return nil, err
 	}
 
 	if len(allAppsInNamespace.Items) == 0 {
-		log.Infof("No applications found in target namespace: %s", cr.Spec.Namespace)
+		log.Infof("No applications found in target namespace: %s", effectiveNamespace)
 		return nil, nil
 	}
 
@@ -332,7 +338,7 @@ func FilterApplicationsForUpdate(ctx context.Context, ctrlClient *ArgoCDK8sClien
 						log.Tracef("Resulted Image Updater object for app %s/%s: %s", app.Namespace, app.Name, string(appRefJSON))
 					}
 				}
-				appNSName := fmt.Sprintf("%s/%s", cr.Spec.Namespace, app.Name)
+				appNSName := fmt.Sprintf("%s/%s", effectiveNamespace, app.Name)
 				processApplicationForUpdate(ctx, &app, localAppRef, mergedCommonUpdateSettings, appWBCSettings, appNSName, appsForUpdate, webhookEvent)
 				break // Found the best match, move to the next app
 			}

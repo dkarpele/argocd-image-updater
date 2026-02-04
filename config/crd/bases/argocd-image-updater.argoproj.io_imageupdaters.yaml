@@ -438,7 +438,6 @@ spec:
                 type: object
             required:
             - applicationRefs
-            - namespace
             type: object
           status:
             description: ImageUpdaterStatus defines the observed state of ImageUpdater

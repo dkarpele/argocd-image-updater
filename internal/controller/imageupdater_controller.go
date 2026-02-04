@@ -59,6 +59,7 @@ type ImageUpdaterConfig struct {
 	DisableKubeEvents      bool
 	GitCreds               git.CredsStore
 	EnableWebhook          bool
+	RequireSameNamespace   bool
 }
 
 // ImageUpdaterReconciler reconciles a ImageUpdater object
@@ -128,6 +129,23 @@ func (r *ImageUpdaterReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, nil
 	}
 	reqLogger.Infof("Successfully fetched ImageUpdater resource.")
+
+	// Get the effective namespace: use spec.namespace if set, otherwise default to ImageUpdater's own namespace
+	effectiveNamespace := req.NamespacedName.Namespace
+	if imageUpdater.Spec.Namespace != nil && *imageUpdater.Spec.Namespace != "" {
+		effectiveNamespace = *imageUpdater.Spec.Namespace
+	} else {
+		reqLogger.Debugf("Namespace not specified, defaulting to ImageUpdater's namespace: %s", effectiveNamespace)
+	}
+
+	// Validate namespace when RequireSameNamespace is enabled
+	if r.Config.RequireSameNamespace {
+		if effectiveNamespace != req.NamespacedName.Namespace {
+			err := fmt.Errorf("when require-same-namespace is enabled, spec.namespace (%s) must match the ImageUpdater's namespace (%s)", effectiveNamespace, req.NamespacedName.Namespace)
+			reqLogger.Errorf("%v", err)
+			return ctrl.Result{}, err
+		}
+	}
 
 	// 2. Handle finalizer logic for graceful deletion.
 	isBeingDeleted := !imageUpdater.ObjectMeta.DeletionTimestamp.IsZero()

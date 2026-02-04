@@ -302,6 +302,7 @@ This enables a CRD-driven approach to automated image updates with Argo CD.
 	controllerCmd.Flags().StringVar(&cfg.ArgocdNamespace, "argocd-namespace", env.GetStringVal("ARGOCD_NAMESPACE", ""), "namespace where ArgoCD runs in (controller namespace by default)")
 	controllerCmd.Flags().BoolVar(&warmUpCache, "warmup-cache", true, "whether to perform a cache warm-up on startup")
 	controllerCmd.Flags().BoolVar(&cfg.DisableKubeEvents, "disable-kube-events", env.GetBoolVal("IMAGE_UPDATER_KUBE_EVENTS", false), "Disable kubernetes events")
+	controllerCmd.Flags().BoolVar(&cfg.RequireSameNamespace, "require-same-namespace", env.GetBoolVal("REQUIRE_SAME_NAMESPACE", false), "Only allow ImageUpdater resources to reference Applications in the same namespace")
 
 	// Git flags
 	controllerCmd.Flags().StringVar(&cfg.GitCommitUser, "git-commit-user", env.GetStringVal("GIT_COMMIT_USER", "argocd-image-updater"), "Username to use for Git commits")

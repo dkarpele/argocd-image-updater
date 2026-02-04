@@ -27,8 +27,9 @@ type ImageUpdaterSpec struct {
 	// Namespace indicates the target namespace of the applications.
 	// This is the namespace where the controller will look for Argo CD Applications
 	// matching the criteria in ApplicationRefs.
-	// +kubebuilder:validation:Required
-	Namespace string `json:"namespace"`
+	// If not specified, defaults to the ImageUpdater's own namespace.
+	// +optional
+	Namespace *string `json:"namespace,omitempty"`
 
 	// CommonUpdateSettings provides global default settings for update strategies,
 	// tag filtering, pull secrets, etc., for all applications matched by this CR.
