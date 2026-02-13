@@ -18,6 +18,7 @@ package parallel
 
 import (
 	"context"
+	"time"
 
 	applicationFixture "github.com/argoproj-labs/argocd-image-updater/test/ginkgo/fixture/application"
 	appv1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
@@ -48,12 +49,18 @@ var _ = Describe("ArgoCD Image Updater Parallel E2E Tests", func() {
 	Context("1-007-app-in-any-ns-test", func() {
 
 		var (
-			k8sClient    client.Client
-			ctx          context.Context
-			ns           *corev1.Namespace
-			cleanupFunc  func()
-			imageUpdater *imageUpdaterApi.ImageUpdater
-			argoCD       *argov1beta1api.ArgoCD
+			k8sClient                       client.Client
+			ctx                             context.Context
+			ns                              *corev1.Namespace
+			cleanupFunc                     func()
+			imageUpdater                    *imageUpdaterApi.ImageUpdater
+			argoCD                          *argov1beta1api.ArgoCD
+			notificationClusterRole         *rbacv1.ClusterRole
+			notificationClusterRoleBinding  *rbacv1.ClusterRoleBinding
+			serverClusterRole               *rbacv1.ClusterRole
+			serverClusterRoleBinding        *rbacv1.ClusterRoleBinding
+			appControllerClusterRole        *rbacv1.ClusterRole
+			appControllerClusterRoleBinding *rbacv1.ClusterRoleBinding
 		)
 
 		BeforeEach(func() {
@@ -77,6 +84,18 @@ var _ = Describe("ArgoCD Image Updater Parallel E2E Tests", func() {
 				_ = k8sClient.Delete(ctx, argoCD)
 			}
 
+			if notificationClusterRole != nil {
+				By("deleting ClusterRoles")
+				_ = k8sClient.Delete(ctx, notificationClusterRole)
+				_ = k8sClient.Delete(ctx, notificationClusterRoleBinding)
+				_ = k8sClient.Delete(ctx, serverClusterRole)
+				_ = k8sClient.Delete(ctx, serverClusterRoleBinding)
+				if appControllerClusterRole != nil {
+					_ = k8sClient.Delete(ctx, appControllerClusterRole)
+					_ = k8sClient.Delete(ctx, appControllerClusterRoleBinding)
+				}
+			}
+
 			if cleanupFunc != nil {
 				cleanupFunc()
 			}
@@ -87,11 +106,225 @@ var _ = Describe("ArgoCD Image Updater Parallel E2E Tests", func() {
 
 		It("ensures that Image Updater will update Argo CD Application using argocd (default) policy using legacy annotations", func() {
 
-			By("creating simple namespace-scoped Argo CD instance with image updater enabled")
+			By("creating namespaces")
 			ns, cleanupFunc = fixture.CreateRandomE2ETestNamespaceWithCleanupFunc()
-
 			nsDev := fixture.CreateNamespace("dev")
 
+			// RBAC must be created BEFORE the ArgoCD CR so that when the application-controller
+			// starts up with application.namespaces pointing to dev, it already has the
+			// permissions to set up informers/watches for that namespace. Without this,
+			// the controller's informers fail at startup and don't retry, leaving
+			// Applications in external namespaces undiscovered (empty health/sync status).
+
+			By("creating RBAC to allow notifications-controller to access Applications in all namespaces")
+			notificationClusterRole = &rbacv1.ClusterRole{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "argocd-notifications-controller-cluster-apps",
+					Labels: map[string]string{
+						"app.kubernetes.io/name":      "argocd-notifications-controller-cluster-apps",
+						"app.kubernetes.io/part-of":   ns.Name,
+						"app.kubernetes.io/component": "notifications-controller",
+					},
+				},
+				Rules: []rbacv1.PolicyRule{
+					{
+						APIGroups: []string{""},
+						Resources: []string{"secrets", "configmaps"},
+						Verbs:     []string{"get", "list", "watch"},
+					},
+					{
+						APIGroups: []string{"argoproj.io"},
+						Resources: []string{"applications"},
+						Verbs:     []string{"get", "list", "watch", "update", "patch"},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, notificationClusterRole)).To(Succeed())
+
+			notificationClusterRoleBinding = &rbacv1.ClusterRoleBinding{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "argocd-notifications-controller-cluster-apps",
+					Labels: map[string]string{
+						"app.kubernetes.io/name":      "argocd-notifications-controller-cluster-apps",
+						"app.kubernetes.io/part-of":   ns.Name,
+						"app.kubernetes.io/component": "notifications-controller",
+					},
+				},
+				RoleRef: rbacv1.RoleRef{
+					APIGroup: "rbac.authorization.k8s.io",
+					Kind:     "ClusterRole",
+					Name:     "argocd-notifications-controller-cluster-apps",
+				},
+				Subjects: []rbacv1.Subject{
+					{
+						Kind:      "ServiceAccount",
+						Name:      "argocd-notifications-controller",
+						Namespace: ns.Name,
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, notificationClusterRoleBinding)).To(Succeed())
+
+			By("creating RBAC to allow argocd-server to perform CRUD operations on Applications in all namespaces")
+			serverClusterRole = &rbacv1.ClusterRole{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "argocd-server-cluster-apps",
+					Labels: map[string]string{
+						"app.kubernetes.io/name":      "argocd-server-cluster-apps",
+						"app.kubernetes.io/part-of":   ns.Name,
+						"app.kubernetes.io/component": "server",
+					},
+				},
+				Rules: []rbacv1.PolicyRule{
+					{
+						APIGroups: []string{""},
+						Resources: []string{"events"},
+						Verbs:     []string{"create"},
+					},
+					{
+						APIGroups: []string{"argoproj.io"},
+						Resources: []string{"applications"},
+						Verbs:     []string{"create", "delete", "update", "patch"},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, serverClusterRole)).To(Succeed())
+
+			serverClusterRoleBinding = &rbacv1.ClusterRoleBinding{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "argocd-server-cluster-apps",
+					Labels: map[string]string{
+						"app.kubernetes.io/name":      "argocd-server-cluster-apps",
+						"app.kubernetes.io/part-of":   ns.Name,
+						"app.kubernetes.io/component": "server",
+					},
+				},
+				RoleRef: rbacv1.RoleRef{
+					APIGroup: "rbac.authorization.k8s.io",
+					Kind:     "ClusterRole",
+					Name:     "argocd-server-cluster-apps",
+				},
+				Subjects: []rbacv1.Subject{
+					{
+						Kind:      "ServiceAccount",
+						Name:      "argocd-server",
+						Namespace: ns.Name,
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, serverClusterRoleBinding)).To(Succeed())
+
+			By("creating ClusterRole for argocd-application-controller to discover and manage Applications in other namespaces")
+			appControllerClusterRole = &rbacv1.ClusterRole{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "argocd-application-controller-cluster-apps",
+					Labels: map[string]string{
+						"app.kubernetes.io/name":      "argocd-application-controller-cluster-apps",
+						"app.kubernetes.io/part-of":   ns.Name,
+						"app.kubernetes.io/component": "application-controller",
+					},
+				},
+				Rules: []rbacv1.PolicyRule{
+					{
+						APIGroups: []string{"argoproj.io"},
+						Resources: []string{"applications"},
+						Verbs:     []string{"get", "list", "watch", "update", "patch"},
+					},
+					{
+						APIGroups: []string{"argoproj.io"},
+						Resources: []string{"applications/status"},
+						Verbs:     []string{"update", "patch"},
+					},
+					{
+						APIGroups: []string{"argoproj.io"},
+						Resources: []string{"appprojects"},
+						Verbs:     []string{"get", "list", "watch"},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, appControllerClusterRole)).To(Succeed())
+
+			appControllerClusterRoleBinding = &rbacv1.ClusterRoleBinding{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "argocd-application-controller-cluster-apps",
+					Labels: map[string]string{
+						"app.kubernetes.io/name":      "argocd-application-controller-cluster-apps",
+						"app.kubernetes.io/part-of":   ns.Name,
+						"app.kubernetes.io/component": "application-controller",
+					},
+				},
+				RoleRef: rbacv1.RoleRef{
+					APIGroup: "rbac.authorization.k8s.io",
+					Kind:     "ClusterRole",
+					Name:     "argocd-application-controller-cluster-apps",
+				},
+				Subjects: []rbacv1.Subject{
+					{
+						Kind:      "ServiceAccount",
+						Name:      "argocd-argocd-application-controller",
+						Namespace: ns.Name,
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, appControllerClusterRoleBinding)).To(Succeed())
+
+			By("creating RBAC for argocd-application-controller in dev namespace")
+			appControllerRole := &rbacv1.Role{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "argocd-application-controller",
+					Namespace: nsDev.Name,
+				},
+				Rules: []rbacv1.PolicyRule{
+					{
+						APIGroups: []string{""},
+						Resources: []string{"pods", "services", "replicationcontrollers", "configmaps", "secrets", "endpoints", "persistentvolumeclaims", "events"},
+						Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+					},
+					{
+						APIGroups: []string{"apps"},
+						Resources: []string{"deployments", "daemonsets", "replicasets", "statefulsets"},
+						Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+					},
+					{
+						APIGroups: []string{"extensions", "networking.k8s.io"},
+						Resources: []string{"ingresses"},
+						Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+					},
+					{
+						APIGroups: []string{"batch"},
+						Resources: []string{"jobs", "cronjobs"},
+						Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+					},
+					{
+						APIGroups: []string{"argoproj.io"},
+						Resources: []string{"applications", "appprojects"},
+						Verbs:     []string{"get", "list", "watch"},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, appControllerRole)).To(Succeed())
+
+			appControllerRoleBinding := &rbacv1.RoleBinding{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "argocd-application-controller-binding",
+					Namespace: nsDev.Name,
+				},
+				RoleRef: rbacv1.RoleRef{
+					APIGroup: "rbac.authorization.k8s.io",
+					Kind:     "Role",
+					Name:     "argocd-application-controller",
+				},
+				Subjects: []rbacv1.Subject{
+					{
+						Kind:      "ServiceAccount",
+						Name:      "argocd-argocd-application-controller",
+						Namespace: ns.Name,
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, appControllerRoleBinding)).To(Succeed())
+
+			By("creating simple namespace-scoped Argo CD instance with image updater enabled")
 			argoCD = &argov1beta1api.ArgoCD{
 				ObjectMeta: metav1.ObjectMeta{Name: "argocd", Namespace: ns.Name},
 				Spec: argov1beta1api.ArgoCDSpec{
@@ -131,51 +364,41 @@ var _ = Describe("ArgoCD Image Updater Parallel E2E Tests", func() {
 			Eventually(statefulSet).Should(ssFixture.HaveReplicas(1))
 			Eventually(statefulSet, "3m", "3s").Should(ssFixture.HaveReadyReplicas(1))
 
-			By("creating RBAC for argocd-application-controller in dev namespace")
-			role := &rbacv1.Role{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "argocd-application-controller",
-					Namespace: nsDev.Name,
-				},
-				Rules: []rbacv1.PolicyRule{
-					{
-						APIGroups: []string{""},
-						Resources: []string{"pods", "services", "replicationcontrollers"},
-						Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
-					},
-					{
-						APIGroups: []string{"apps"},
-						Resources: []string{"deployments", "daemonsets", "replicasets", "statefulsets"},
-						Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
-					},
-					{
-						APIGroups: []string{"extensions"},
-						Resources: []string{"ingresses"},
-						Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
-					},
-				},
-			}
-			Expect(k8sClient.Create(ctx, role)).To(Succeed())
+			By("verifying argocd-cmd-params-cm ConfigMap exists with application.namespaces")
+			cmdParamsCM := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "argocd-cmd-params-cm", Namespace: ns.Name}}
+			Eventually(func() bool {
+				if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(cmdParamsCM), cmdParamsCM); err != nil {
+					return false
+				}
+				return cmdParamsCM.Data["application.namespaces"] == nsDev.Name
+			}, "2m", "3s").Should(BeTrue())
 
-			roleBinding := &rbacv1.RoleBinding{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "argocd-application-controller-binding",
-					Namespace: nsDev.Name,
-				},
-				RoleRef: rbacv1.RoleRef{
-					APIGroup: "rbac.authorization.k8s.io",
-					Kind:     "Role",
-					Name:     "argocd-application-controller",
-				},
-				Subjects: []rbacv1.Subject{
-					{
-						Kind:      "ServiceAccount",
-						Name:      "argocd-application-controller",
-						Namespace: ns.Name,
-					},
-				},
-			}
-			Expect(k8sClient.Create(ctx, roleBinding)).To(Succeed())
+			// The application-controller pod may have started before the argocd-cmd-params-cm
+			// ConfigMap was created (operator race condition). Since application.namespaces is
+			// read at startup via env var (configMapKeyRef optional:true), the controller won't
+			// know about the dev namespace. A rollout restart ensures the controller picks up
+			// the ConfigMap and all RBAC that's now in place.
+			By("restarting argocd-server and argocd-application-controller to pick up application.namespaces config")
+			restartTimestamp := time.Now().Format(time.RFC3339)
+
+			serverDepl := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "argocd-server", Namespace: ns.Name}}
+			deplFixture.Update(serverDepl, func(d *appsv1.Deployment) {
+				if d.Spec.Template.ObjectMeta.Annotations == nil {
+					d.Spec.Template.ObjectMeta.Annotations = map[string]string{}
+				}
+				d.Spec.Template.ObjectMeta.Annotations["kubectl.kubernetes.io/restartedAt"] = restartTimestamp
+			})
+
+			ssFixture.Update(statefulSet, func(ss *appsv1.StatefulSet) {
+				if ss.Spec.Template.ObjectMeta.Annotations == nil {
+					ss.Spec.Template.ObjectMeta.Annotations = map[string]string{}
+				}
+				ss.Spec.Template.ObjectMeta.Annotations["kubectl.kubernetes.io/restartedAt"] = restartTimestamp
+			})
+
+			By("waiting for argocd-server and argocd-application-controller to be ready after restart")
+			Eventually(serverDepl, "3m", "3s").Should(deplFixture.HaveReadyReplicas(1))
+			Eventually(statefulSet, "3m", "3s").Should(ssFixture.HaveReadyReplicas(1))
 
 			By("creating AppProject")
 			appProject := &appv1alpha1.AppProject{
