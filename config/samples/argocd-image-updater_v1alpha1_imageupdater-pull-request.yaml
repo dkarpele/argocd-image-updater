@@ -1,0 +1,61 @@
+apiVersion: argocd-image-updater.argoproj.io/v1alpha1
+kind: ImageUpdater
+metadata:
+  labels:
+    app.kubernetes.io/name: argocd-image-updater
+    app.kubernetes.io/managed-by: kustomize
+  name: argocd-image-updater-github
+  namespace: argocd
+spec:
+  pullRequest:
+    gitlab:
+      project: s
+    github:
+      # The GitHub organization or user.
+      owner: myorg
+      # The Github repository
+      repo: myrepository
+      # For GitHub Enterprise (optional)
+      api: https://git.example.com/
+      # Reference to a Secret containing an access token. (optional)
+      tokenRef:
+        secretName: github-token
+        key: token
+      # (optional) use a GitHub App to access the API instead of a PAT.
+      appSecretName: github-app-repo-creds
+  applicationRefs:
+    - namePattern: "app-001"
+      images:
+        - alias: "nginx"
+          imageName: "nginx:1.17.10"
+---
+apiVersion: argocd-image-updater.argoproj.io/v1alpha1
+kind: ImageUpdater
+metadata:
+  labels:
+    app.kubernetes.io/name: argocd-image-updater
+    app.kubernetes.io/managed-by: kustomize
+  name: argocd-image-updater-gitlab
+  namespace: argocd
+spec:
+  pullRequest:
+    gitlab:
+      # The GitLab project ID.
+      project: "12341234"
+      # For self-hosted GitLab (optional)
+      api: https://git.example.com/
+      # Reference to a Secret containing an access token. (optional)
+      tokenRef:
+        secretName: gitlab-token
+        key: token
+      # If true, skips validating the SCM provider's TLS certificate - useful for self-signed certificates.
+      insecure: false
+      # Reference to a ConfigMap containing trusted CA certs - useful for self-signed certificates. (optional)
+      caRef:
+        configMapName: argocd-tls-certs-cm
+        key: gitlab-ca
+  applicationRefs:
+    - namePattern: "app-001"
+      images:
+        - alias: "nginx"
+          imageName: "nginx:1.17.10"

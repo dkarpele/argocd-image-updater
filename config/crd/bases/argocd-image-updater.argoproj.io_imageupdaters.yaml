@@ -411,6 +411,99 @@ spec:
                   The controller now uses the ImageUpdater CR's namespace (metadata.namespace)
                   to determine which namespace to search for applications. This field is ignored.
                 type: string
+              pullRequest:
+                description: |-
+                  PullRequest configures creation of pull requests when writing back image updates to Git.
+                  When set, the controller opens a PR instead of pushing to the branch.
+                  Ignored if write back config method is `argocd`.
+                properties:
+                  github:
+                    description: GitHub configures PR creation via the GitHub API.
+                    properties:
+                      api:
+                        description: API is the GitHub API base URL. If empty, defaults
+                          to https://api.github.com/.
+                        type: string
+                      appSecretName:
+                        description: AppSecretName is the name of a secret containing
+                          GitHub App credentials with repo and PR access.
+                        type: string
+                      owner:
+                        description: Owner is the GitHub org or user that owns the
+                          repository. Required.
+                        type: string
+                      repo:
+                        description: Repo is the GitHub repository name. Required.
+                        type: string
+                      tokenRef:
+                        description: TokenRef references a secret key used to authenticate
+                          with the GitHub API.
+                        properties:
+                          key:
+                            description: Key is the key within the Secret.
+                            type: string
+                          secretName:
+                            description: SecretName is the name of the Secret.
+                            type: string
+                        required:
+                        - key
+                        - secretName
+                        type: object
+                    required:
+                    - owner
+                    - repo
+                    type: object
+                  gitlab:
+                    description: GitLab configures MR creation via the GitLab API.
+                    properties:
+                      api:
+                        description: API is the GitLab API base URL. If empty, defaults
+                          to https://gitlab.com/.
+                        type: string
+                      caRef:
+                        description: CARef references a ConfigMap key containing CA
+                          certificates for TLS verification.
+                        properties:
+                          configMapName:
+                            description: ConfigMapName is the name of the ConfigMap.
+                            type: string
+                          key:
+                            description: Key is the key within the ConfigMap.
+                            type: string
+                        required:
+                        - configMapName
+                        - key
+                        type: object
+                      insecure:
+                        description: Insecure skips TLS verification for the GitLab
+                          API. Use for self-signed certificates; default false.
+                        type: boolean
+                      project:
+                        description: Project is the GitLab project (e.g. group/name
+                          or project ID) to use. Required.
+                        type: string
+                      tokenRef:
+                        description: TokenRef references a secret key used to authenticate
+                          with the GitLab API.
+                        properties:
+                          key:
+                            description: Key is the key within the Secret.
+                            type: string
+                          secretName:
+                            description: SecretName is the name of the Secret.
+                            type: string
+                        required:
+                        - key
+                        - secretName
+                        type: object
+                    required:
+                    - project
+                    type: object
+                type: object
+                x-kubernetes-validations:
+                - message: Exactly one of github or gitlab must be specified within
+                    pullRequest if the block is present.
+                  rule: 'has(self.github) ? !has(self.gitlab) : has(self.gitlab)'
               writeBackConfig:
                 description: |-
                   WriteBackConfig provides global default settings for how and where to write back image updates.

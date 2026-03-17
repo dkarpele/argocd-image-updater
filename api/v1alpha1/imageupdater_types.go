@@ -50,6 +50,12 @@ type ImageUpdaterSpec struct {
 	// +listType=map
 	// +listMapKey=namePattern
 	ApplicationRefs []ApplicationRef `json:"applicationRefs"`
+
+	// PullRequest configures creation of pull requests when writing back image updates to Git.
+	// When set, the controller opens a PR instead of pushing to the branch.
+	// Ignored if write back config method is `argocd`.
+	// +optional
+	*PullRequest `json:"pullRequest,omitempty"`
 }
 
 // ApplicationRef contains various criteria by which to include applications for managing by image updater
@@ -206,6 +212,87 @@ type WriteBackConfig struct {
 	// This can only be used when method is "git" or starts with "git:".
 	// +optional
 	*GitConfig `json:"gitConfig,omitempty"`
+}
+
+// PullRequest holds provider-specific configuration for creating pull requests
+// when writing back image updates to Git. Exactly one of the providers must be set.
+// based on https://github.com/argoproj/argo-cd/blob/master/pkg/apis/application/v1alpha1/applicationset_types.go
+type PullRequest struct {
+	// GitHub configures PR creation via the GitHub API.
+	// +optional
+	GitHub *PullRequestGitHub `json:"github,omitempty"`
+
+	// GitLab configures MR creation via the GitLab API.
+	// +optional
+	GitLab *PullRequestGitLab `json:"gitlab,omitempty"`
+}
+
+// PullRequestGitHub defines connection and filter options for creating GitHub pull requests.
+type PullRequestGitHub struct {
+	// Owner is the GitHub org or user that owns the repository. Required.
+	// +kubebuilder:validation:Required
+	Owner string `json:"owner"`
+
+	// Repo is the GitHub repository name. Required.
+	// +kubebuilder:validation:Required
+	Repo string `json:"repo"`
+
+	// API is the GitHub API base URL. If empty, defaults to https://api.github.com/.
+	// +optional
+	API string `json:"api,omitempty"`
+
+	// TokenRef references a secret key used to authenticate with the GitHub API.
+	// +optional
+	TokenRef *SecretRef `json:"tokenRef,omitempty"`
+
+	// AppSecretName is the name of a secret containing GitHub App credentials with repo and PR access.
+	// +optional
+	AppSecretName string `json:"appSecretName,omitempty"`
+}
+
+// PullRequestGitLab defines connection and filter options for creating GitLab merge requests.
+type PullRequestGitLab struct {
+	// Project is the GitLab project (e.g. group/name or project ID) to use. Required.
+	// +kubebuilder:validation:Required
+	Project string `json:"project"`
+
+	// API is the GitLab API base URL. If empty, defaults to https://gitlab.com/.
+	// +optional
+	API string `json:"api,omitempty"`
+
+	// TokenRef references a secret key used to authenticate with the GitLab API.
+	// +optional
+	TokenRef *SecretRef `json:"tokenRef,omitempty"`
+
+	// Insecure skips TLS verification for the GitLab API. Use for self-signed certificates; default false.
+	// +optional
+	Insecure bool `json:"insecure,omitempty"`
+
+	// CARef references a ConfigMap key containing CA certificates for TLS verification.
+	// +optional
+	CARef *ConfigMapKeyRef `json:"caRef,omitempty"`
+}
+
+// SecretRef references a key in a Kubernetes Secret (e.g. for API tokens).
+type SecretRef struct {
+	// SecretName is the name of the Secret.
+	// +kubebuilder:validation:Required
+	SecretName string `json:"secretName"`
+
+	// Key is the key within the Secret.
+	// +kubebuilder:validation:Required
+	Key string `json:"key"`
+}
+
+// ConfigMapKeyRef references a key in a ConfigMap (e.g. for CA bundles).
+type ConfigMapKeyRef struct {
+	// ConfigMapName is the name of the ConfigMap.
+	// +kubebuilder:validation:Required
+	ConfigMapName string `json:"configMapName"`
+
+	// Key is the key within the ConfigMap.
+	// +kubebuilder:validation:Required
+	Key string `json:"key"`
 }
 
 // ManifestTarget specifies the mechanism and details for updating image references in application manifests.
