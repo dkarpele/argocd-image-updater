@@ -217,6 +217,7 @@ type WriteBackConfig struct {
 // PullRequest holds provider-specific configuration for creating pull requests
 // when writing back image updates to Git. Exactly one of the providers must be set.
 // based on https://github.com/argoproj/argo-cd/blob/master/pkg/apis/application/v1alpha1/applicationset_types.go
+// +kubebuilder:validation:ExactlyOneOf=github;gitlab
 type PullRequest struct {
 	// GitHub configures PR creation via the GitHub API.
 	// +optional
@@ -245,9 +246,10 @@ type PullRequestGitHub struct {
 	// +optional
 	TokenRef *SecretRef `json:"tokenRef,omitempty"`
 
+	// TODO: implement AppSecretName
 	// AppSecretName is the name of a secret containing GitHub App credentials with repo and PR access.
 	// +optional
-	AppSecretName string `json:"appSecretName,omitempty"`
+	//AppSecretName string `json:"appSecretName,omitempty"`
 }
 
 // PullRequestGitLab defines connection and filter options for creating GitLab merge requests.
@@ -268,9 +270,10 @@ type PullRequestGitLab struct {
 	// +optional
 	Insecure bool `json:"insecure,omitempty"`
 
+	// TODO: implement CARef
 	// CARef references a ConfigMap key containing CA certificates for TLS verification.
 	// +optional
-	CARef *ConfigMapKeyRef `json:"caRef,omitempty"`
+	//CARef *ConfigMapKeyRef `json:"caRef,omitempty"`
 }
 
 // SecretRef references a key in a Kubernetes Secret (e.g. for API tokens).

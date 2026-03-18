@@ -890,6 +890,8 @@ func commitChanges(ctx context.Context, applicationImages *ApplicationImages, ch
 			return commitChangesGit(ctx, applicationImages, changeList, writeKustomization)
 		}
 		return commitChangesGit(ctx, applicationImages, changeList, writeOverrides)
+	case WriteBackPR:
+		// create a Pull Request
 	default:
 		return fmt.Errorf("unknown write back method set: %d", wbc.Method)
 	}

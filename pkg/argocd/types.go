@@ -49,6 +49,7 @@ type WriteBackMethod int
 const (
 	WriteBackApplication WriteBackMethod = 0
 	WriteBackGit         WriteBackMethod = 1
+	WriteBackPR          WriteBackMethod = 2
 )
 
 const defaultIndent = 2

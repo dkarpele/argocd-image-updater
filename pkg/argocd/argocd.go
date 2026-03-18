@@ -10,8 +10,11 @@ import (
 	"slices"
 	"strings"
 
+	pullrequest "github.com/argoproj/argo-cd/v3/applicationset/services/pull_request"
 	"github.com/argoproj/argo-cd/v3/pkg/apiclient/application"
 	argocdapi "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
@@ -229,7 +232,7 @@ func sortApplicationRefs(applicationRefs []iuapi.ApplicationRef) []iuapi.Applica
 // FilterApplicationsForUpdate Retrieve a list of applications from ArgoCD that qualify for image updates
 // Application needs either to be of type Kustomize or Helm.
 func FilterApplicationsForUpdate(ctx context.Context, ctrlClient *ArgoCDK8sClient, kubeClient *kube.ImageUpdaterKubernetesClient, cr *iuapi.ImageUpdater, webhookEvent *WebhookEvent) (map[string]ApplicationImages, error) {
-	log := log.LoggerFromContext(ctx)
+	baseLogger := log.LoggerFromContext(ctx)
 
 	// Validate CR configuration
 	if len(cr.Spec.ApplicationRefs) == 0 {
@@ -250,14 +253,14 @@ func FilterApplicationsForUpdate(ctx context.Context, ctrlClient *ArgoCDK8sClien
 	}
 
 	// Perform the app list operation in the target namespace cr.Namespace.
-	log.Infof("Listing all applications in target namespace: %s", cr.Namespace)
+	baseLogger.Infof("Listing all applications in target namespace: %s", cr.Namespace)
 	if err := ctrlClient.List(ctx, allAppsInNamespace, listOpts...); err != nil {
-		log.Errorf("Failed to list applications in namespace: %s, error: %v", cr.Namespace, err)
+		baseLogger.Errorf("Failed to list applications in namespace: %s, error: %v", cr.Namespace, err)
 		return nil, err
 	}
 
 	if len(allAppsInNamespace.Items) == 0 {
-		log.Infof("No applications found in target namespace: %s", cr.Namespace)
+		baseLogger.Infof("No applications found in target namespace: %s", cr.Namespace)
 		return nil, nil
 	}
 
@@ -271,6 +274,8 @@ func FilterApplicationsForUpdate(ctx context.Context, ctrlClient *ArgoCDK8sClien
 
 	// For each app in the list, find its best matching rule from the CR.
 	for _, app := range allAppsInNamespace.Items {
+		baseLogger = baseLogger.WithField("application", app)
+		ctx = log.ContextWithLogger(ctx, baseLogger)
 		// Find the first matching rule for this application
 		for _, applicationRef := range applicationRefsSorted {
 			// We can ignore the error here because we pre-validated all patterns above.
@@ -285,18 +290,18 @@ func FilterApplicationsForUpdate(ctx context.Context, ctrlClient *ArgoCDK8sClien
 				// (Images, CommonUpdateSettings, WriteBackConfig) and instead read everything from
 				// the Application's legacy argocd-image-updater.argoproj.io/* annotations.
 				if applicationRef.UseAnnotations != nil && *applicationRef.UseAnnotations {
-					log.Debugf("Read settings from application Annotations for app %s/%s", app.Namespace, app.Name)
+					baseLogger.Debugf("Read settings from application Annotations for app %s/%s", app.Namespace, app.Name)
 
 					appRefImages, err := getImagesFromAnnotations(&app)
 					if err != nil {
-						log.Warnf("Could not create image list for app %s/%s, skipping: %v", app.Namespace, app.Name, err)
+						baseLogger.Warnf("Could not create image list for app %s/%s, skipping: %v", app.Namespace, app.Name, err)
 						continue
 					}
 
 					appRefWBC := getWriteBackConfigFromAnnotations(&app)
 					appWBCSettings, err = newWBCFromSettings(ctx, &app, kubeClient, appRefWBC)
 					if err != nil {
-						log.Warnf("Could not create write-back config for app %s/%s, skipping: %v", app.Namespace, app.Name, err)
+						baseLogger.Warnf("Could not create write-back config for app %s/%s, skipping: %v", app.Namespace, app.Name, err)
 						continue
 					}
 
@@ -304,7 +309,7 @@ func FilterApplicationsForUpdate(ctx context.Context, ctrlClient *ArgoCDK8sClien
 					updateStrategyAnnotations := getImageUpdateStrategyAnnotations("")
 					mergedCommonUpdateSettings, err = getCommonUpdateSettingsFromAnnotations(&app, updateStrategyAnnotations)
 					if err != nil {
-						log.Warnf("Could not create common update settings for app %s/%s, skipping: %v", app.Namespace, app.Name, err)
+						baseLogger.Warnf("Could not create common update settings for app %s/%s, skipping: %v", app.Namespace, app.Name, err)
 						continue
 					}
 
@@ -313,25 +318,27 @@ func FilterApplicationsForUpdate(ctx context.Context, ctrlClient *ArgoCDK8sClien
 					localAppRef.WriteBackConfig = appRefWBC
 				} else {
 					// Calculate the effective settings for this ApplicationRef by layering on top of global.
-					log.Debugf("Read settings from Image Updater CR for app %s/%s", app.Namespace, app.Name)
+					baseLogger.Debugf("Read settings from Image Updater CR for app %s/%s", app.Namespace, app.Name)
 					mergedCommonUpdateSettings = mergeCommonUpdateSettings(globalUpdateSettings, applicationRef.CommonUpdateSettings)
 					mergedWBCSettings := mergeWBCSettings(cr.Spec.WriteBackConfig, applicationRef.WriteBackConfig)
 					appWBCSettings, err = newWBCFromSettings(ctx, &app, kubeClient, mergedWBCSettings)
 					if err != nil {
-						log.Warnf("Could not create write-back config for app %s/%s, skipping: %v", app.Namespace, app.Name, err)
+						baseLogger.Warnf("Could not create write-back config for app %s/%s, skipping: %v", app.Namespace, app.Name, err)
 						continue
 					}
 				}
 
 				// Only perform expensive marshaling if trace logging is enabled
-				if log.Logger.IsLevelEnabled(logrus.TraceLevel) {
+				if baseLogger.Logger.IsLevelEnabled(logrus.TraceLevel) {
 					appRefJSON, err := json.MarshalIndent(localAppRef, "", "  ")
 					if err != nil {
-						log.Warnf("Could not marshal application reference for app %s/%s", app.Namespace, app.Name)
+						baseLogger.Warnf("Could not marshal application reference for app %s/%s", app.Namespace, app.Name)
 					} else {
-						log.Tracef("Resulted Image Updater object for app %s/%s: %s", app.Namespace, app.Name, string(appRefJSON))
+						baseLogger.Tracef("Resulted Image Updater object for app %s/%s: %s", app.Namespace, app.Name, string(appRefJSON))
 					}
 				}
+				pullrequest.PullRequestService()
+				// pass PullRequestService to processApplicationForUpdate
 				appNSName := fmt.Sprintf("%s/%s", app.Namespace, app.Name)
 				processApplicationForUpdate(ctx, &app, localAppRef, mergedCommonUpdateSettings, appWBCSettings, appNSName, appsForUpdate, webhookEvent)
 				break // Found the best match, move to the next app
@@ -339,6 +346,19 @@ func FilterApplicationsForUpdate(ctx context.Context, ctrlClient *ArgoCDK8sClien
 		}
 	}
 	return appsForUpdate, nil
+}
+
+func getPullRequestService(ctx context.Context, spec *iuapi.ImageUpdaterSpec) (pullrequest.PullRequestService, error) {
+	log := log.LoggerFromContext(ctx)
+	if spec.PullSecret == nil {
+		log.Infof("pull request is not configured")
+		return nil, nil
+	}
+	if spec.PullRequest.GitHub != nil {
+		log.Infof("pull request is configured to use GitHub")
+		return pullrequest.NewGithubService()
+	}
+	return nil, fmt.Errorf("pull request service is not configured")
 }
 
 // mergeCommonUpdateSettings merges a list of CommonUpdateSettings.

@@ -8,8 +8,6 @@ metadata:
   namespace: argocd
 spec:
   pullRequest:
-    gitlab:
-      project: s
     github:
       # The GitHub organization or user.
       owner: myorg
@@ -21,13 +19,17 @@ spec:
       tokenRef:
         secretName: github-token
         key: token
-      # (optional) use a GitHub App to access the API instead of a PAT.
-      appSecretName: github-app-repo-creds
   applicationRefs:
     - namePattern: "app-001"
       images:
         - alias: "nginx"
           imageName: "nginx:1.17.10"
+      writeBackConfig:
+        method: "git:secret:argocd-image-updater/git-creds"
+        gitConfig: # Group git-related settings. Should be ignored when writeBackMethod: "argocd"
+          repository: "git@github.com:example/example.git"
+          branch: "main"
+          writeBackTarget: "helmvalues:/helm/config/test-values.yaml" # OR "kustomization:/config/overlays/bar" OR "helmvalues:/{{ .app.path.path }}/values.yaml" - for ApplicationSet.
 ---
 apiVersion: argocd-image-updater.argoproj.io/v1alpha1
 kind: ImageUpdater
@@ -38,6 +40,8 @@ metadata:
   name: argocd-image-updater-gitlab
   namespace: argocd
 spec:
+  writeBackConfig:
+    method: "git:secret:argocd-image-updater/git-creds"
   pullRequest:
     gitlab:
       # The GitLab project ID.
@@ -50,10 +54,6 @@ spec:
         key: token
       # If true, skips validating the SCM provider's TLS certificate - useful for self-signed certificates.
       insecure: false
-      # Reference to a ConfigMap containing trusted CA certs - useful for self-signed certificates. (optional)
-      caRef:
-        configMapName: argocd-tls-certs-cm
-        key: gitlab-ca
   applicationRefs:
     - namePattern: "app-001"
       images:
